@@ -6,6 +6,47 @@ import { existsSync, readFileSync } from 'fs';
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = dirname(__filename);
 
+// Função para sanitizar e validar DATABASE_URL
+function sanitizeDatabaseUrl(url) {
+  if (!url || typeof url !== 'string') {
+    throw new Error('DATABASE_URL deve ser uma string válida');
+  }
+  
+  let cleanUrl = url.trim();
+  
+  // Remover espaços e quebras de linha
+  cleanUrl = cleanUrl.replace(/\s+/g, '');
+  
+  // Verificar se começa com postgres:// ou postgresql://
+  if (!cleanUrl.startsWith('postgres://') && !cleanUrl.startsWith('postgresql://')) {
+    throw new Error('DATABASE_URL deve começar com postgres:// ou postgresql://');
+  }
+  
+  // Tentar fazer parse da URL para validar formato
+  try {
+    // Extrair componentes básicos
+    const match = cleanUrl.match(/^(postgresql?):\/\/([^:]+):([^@]+)@(.+)$/);
+    if (!match) {
+      throw new Error('Formato inválido da DATABASE_URL');
+    }
+    
+    const [, protocol, user, password, rest] = match;
+    
+    // Se a senha não estiver codificada e tiver caracteres especiais, codificar
+    if (password && (password.includes('$') || password.includes('#') || password.includes('@') || password.includes('&'))) {
+      const encodedPassword = encodeURIComponent(password);
+      cleanUrl = `${protocol}://${user}:${encodedPassword}@${rest}`;
+      console.log('✅ Senha codificada para URL');
+    }
+    
+    return cleanUrl;
+  } catch (error) {
+    console.error('⚠️ Erro ao sanitizar DATABASE_URL:', error.message);
+    // Retornar URL original se não conseguir sanitizar
+    return cleanUrl;
+  }
+}
+
 // Carregar variáveis de ambiente
 // No Vercel, as variáveis já vêm de process.env
 // Localmente, tentamos carregar do arquivo .env
@@ -40,20 +81,13 @@ if (!process.env.DATABASE_URL) {
       }
     });
 
-    // Fazer URL encoding da senha se necessário (para caracteres especiais como $, #, etc)
+    // Sanitizar a URL do .env
     if (databaseUrl) {
       try {
-        // Tentar fazer parse da URL e re-encodar a senha
-        const urlMatch = databaseUrl.match(/postgresql?:\/\/([^:]+):([^@]+)@(.+)/);
-        if (urlMatch) {
-          const [, user, password, rest] = urlMatch;
-          // Fazer encode apenas da senha para preservar caracteres especiais
-          const encodedPassword = encodeURIComponent(password);
-          databaseUrl = `postgresql://${user}:${encodedPassword}@${rest}`;
-          console.log('✅ Senha codificada para URL');
-        }
+        databaseUrl = sanitizeDatabaseUrl(databaseUrl);
       } catch (error) {
-        console.log('⚠️ Usando URL original (sem encoding)');
+        console.error('⚠️ Erro ao sanitizar DATABASE_URL do .env:', error.message);
+        // Continuar com a URL original
       }
     }
 
@@ -66,8 +100,18 @@ if (!process.env.DATABASE_URL) {
 
 const { Pool } = pg;
 
-// Verificar se a variável de ambiente está definida
-if (!process.env.DATABASE_URL) {
+// Verificar se a variável de ambiente está definida e sanitizar
+if (process.env.DATABASE_URL) {
+  try {
+    process.env.DATABASE_URL = sanitizeDatabaseUrl(process.env.DATABASE_URL);
+  } catch (error) {
+    console.error('❌ Erro ao processar DATABASE_URL:', error.message);
+    // Não fazer exit no Vercel
+    if (process.env.VERCEL !== '1') {
+      process.exit(1);
+    }
+  }
+} else {
   console.error('❌ DATABASE_URL não encontrada');
   console.log('📝 Configure DATABASE_URL nas variáveis de ambiente do Vercel ou no arquivo .env');
   // Não fazer exit no Vercel, deixar que o erro seja tratado quando tentar usar o pool
@@ -87,19 +131,22 @@ function getPool() {
       throw new Error(errorMsg);
     }
     
+    // A DATABASE_URL já foi sanitizada no início do arquivo
+    const databaseUrl = process.env.DATABASE_URL;
+    
     console.log('🔗 Criando conexão com banco de dados...');
     try {
-      const hostMatch = process.env.DATABASE_URL.match(/@([^:]+):/);
+      const hostMatch = databaseUrl.match(/@([^:]+):/);
       const host = hostMatch ? hostMatch[1] : 'não encontrado';
       console.log('📋 Host:', host);
-      console.log('📋 Database URL configurada:', process.env.DATABASE_URL ? 'Sim' : 'Não');
+      console.log('📋 Database URL válida: Sim');
     } catch (e) {
       console.log('⚠️ Não foi possível extrair informações da URL');
     }
 
     // Configurar pool com connection string
     const poolConfig = {
-      connectionString: process.env.DATABASE_URL,
+      connectionString: databaseUrl,
       ssl: {
         rejectUnauthorized: false
       },
@@ -108,7 +155,20 @@ function getPool() {
       connectionTimeoutMillis: 20000,
     };
 
-    pool = new Pool(poolConfig);
+    try {
+      pool = new Pool(poolConfig);
+    } catch (error) {
+      console.error('❌ Erro ao criar Pool:');
+      console.error('   Mensagem:', error.message);
+      console.error('   Stack:', error.stack);
+      
+      // Se o erro menciona searchParams, pode ser problema com formato da URL
+      if (error.message && error.message.includes('searchParams')) {
+        throw new Error('Formato inválido da DATABASE_URL. Verifique se a URL está correta e se caracteres especiais estão codificados (use encodeURIComponent para senhas com caracteres especiais).');
+      }
+      
+      throw new Error(`Erro ao criar pool de conexões: ${error.message}`);
+    }
 
     // Testar conexão
     pool.on('connect', () => {
