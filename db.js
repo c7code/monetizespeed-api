@@ -54,6 +54,15 @@ function sanitizeDatabaseUrl(url) {
     // Reconstruir a URL com a senha codificada
     cleanUrl = `${protocol}://${user}:${finalPassword}@${rest}`;
     
+    // Validar que o hostname ainda está presente após a reconstrução
+    const hostMatch = cleanUrl.match(/@([^:]+):/);
+    if (!hostMatch) {
+      throw new Error('Hostname não encontrado após sanitização da URL');
+    }
+    
+    console.log('✅ URL sanitizada com sucesso');
+    console.log('📋 Hostname:', hostMatch[1]);
+    
     return cleanUrl;
   } catch (error) {
     console.error('⚠️ Erro ao sanitizar DATABASE_URL:', error.message);
@@ -233,9 +242,13 @@ export async function testConnection() {
     
     // Mensagens de erro mais específicas
     if (error.code === 'ENOTFOUND') {
-      throw new Error(`Host do banco de dados não encontrado. Verifique se a DATABASE_URL está correta.`);
+      const hostMatch = error.message?.match(/getaddrinfo ENOTFOUND (.+)/);
+      const host = hostMatch ? hostMatch[1] : 'host desconhecido';
+      console.error(`❌ DNS não conseguiu resolver o hostname: ${host}`);
+      console.error(`❌ Verifique se o hostname está correto na DATABASE_URL`);
+      throw new Error(`Host do banco de dados não encontrado (${host}). Verifique se a DATABASE_URL está correta e se o hostname do Supabase está acessível. Se você está usando Supabase, verifique se o projeto ainda está ativo e se a URL de conexão está atualizada.`);
     } else if (error.code === 'ECONNREFUSED') {
-      throw new Error(`Conexão recusada pelo banco de dados. Verifique se o servidor está acessível.`);
+      throw new Error(`Conexão recusada pelo banco de dados. Verifique se o servidor está acessível e se o firewall permite conexões.`);
     } else if (error.code === '28P01') {
       throw new Error(`Falha na autenticação. Verifique usuário e senha na DATABASE_URL.`);
     } else if (error.code === '3D000') {
