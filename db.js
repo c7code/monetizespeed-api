@@ -130,8 +130,6 @@ export async function testConnection() {
 export async function initDatabase() {
   try {
     const dbPool = getPool();
-    // Testar conexão primeiro
-    await testConnection();
     // Tabela de usuários
     await dbPool.query(`
       CREATE TABLE IF NOT EXISTS users (
