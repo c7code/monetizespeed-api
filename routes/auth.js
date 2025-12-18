@@ -75,23 +75,61 @@ router.post('/login', async (req, res) => {
     }
 
     // Buscar usuário
-    const pool = getPool();
-    const result = await pool.query(
-      'SELECT id, email, password_hash, name FROM users WHERE email = $1',
-      [email.toLowerCase()]
-    );
+    let pool;
+    try {
+      pool = getPool();
+    } catch (poolError) {
+      console.error('Erro ao obter pool de conexão:', poolError);
+      return res.status(500).json({ 
+        error: 'Erro ao conectar ao banco de dados',
+        message: poolError.message 
+      });
+    }
+    
+    let result;
+    try {
+      result = await pool.query(
+        'SELECT id, email, password_hash, name FROM users WHERE email = $1',
+        [email.toLowerCase()]
+      );
+    } catch (queryError) {
+      console.error('Erro ao executar query:', queryError);
+      console.error('Stack:', queryError.stack);
+      return res.status(500).json({ 
+        error: 'Erro ao buscar usuário',
+        message: queryError.message || 'Erro ao consultar banco de dados'
+      });
+    }
 
     if (result.rows.length === 0) {
       return res.status(401).json({ error: 'Credenciais inválidas' });
     }
 
     const user = result.rows[0];
+    
+    // Verificar se o usuário tem password_hash
+    if (!user.password_hash) {
+      console.error('Usuário sem password_hash:', user.id);
+      return res.status(500).json({ 
+        error: 'Erro interno do servidor',
+        message: 'Dados do usuário inválidos'
+      });
+    }
 
     // Verificar senha
     const isValidPassword = await bcrypt.compare(password, user.password_hash);
 
     if (!isValidPassword) {
       return res.status(401).json({ error: 'Credenciais inválidas' });
+    }
+
+    // Verificar se JWT_SECRET está configurado
+    if (!process.env.JWT_SECRET) {
+      console.error('JWT_SECRET não está configurado');
+      return res.status(500).json({ 
+        error: 'Erro de configuração do servidor',
+        message: 'JWT_SECRET não está configurado'
+      });
     }
 
     // Gerar token JWT
@@ -112,7 +150,19 @@ router.post('/login', async (req, res) => {
     });
   } catch (error) {
     console.error('Erro no login:', error);
-    res.status(500).json({ error: 'Erro ao fazer login' });
+    console.error('Stack:', error.stack);
+    console.error('Mensagem:', error.message);
+    
+    // Retornar mensagem de erro mais detalhada
+    res.status(500).json({ 
+      error: 'Erro ao fazer login',
+      message: error.message || 'Erro desconhecido',
+      // Em desenvolvimento, mostrar mais detalhes
+      ...(process.env.NODE_ENV !== 'production' && { 
+        stack: error.stack,
+        details: error.toString()
+      })
+    });
   }
 });
 
