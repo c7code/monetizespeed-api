@@ -12,19 +12,52 @@ import userRoutes from './routes/user.js';
 const app = express();
 const PORT = process.env.PORT || 3000;
 
-// Middleware
-app.use(cors());
+// Middleware CORS - Configurado para aceitar requisições do frontend
+const corsOptions = {
+  origin: function (origin, callback) {
+    // Permite requisições sem origin (mobile apps, Postman, etc)
+    if (!origin) return callback(null, true);
+    
+    // Lista de origens permitidas
+    const allowedOrigins = [
+      'http://localhost:5173',
+      'http://localhost:3000',
+      'http://127.0.0.1:5173',
+      'https://monetizespeed-client-black.vercel.app',
+      'https://monetizespeed-client.vercel.app',
+    ];
+    
+    // Permite qualquer subdomínio do Vercel
+    if (origin.includes('.vercel.app')) {
+      return callback(null, true);
+    }
+    
+    // Verifica se a origem está na lista permitida
+    if (allowedOrigins.includes(origin)) {
+      callback(null, true);
+    } else {
+      callback(null, true); // Em desenvolvimento, permite todas (pode restringir em produção)
+    }
+  },
+  credentials: true,
+  methods: ['GET', 'POST', 'PUT', 'DELETE', 'OPTIONS', 'PATCH'],
+  allowedHeaders: ['Content-Type', 'Authorization', 'X-Requested-With'],
+  exposedHeaders: ['Content-Range', 'X-Content-Range'],
+  maxAge: 86400, // 24 horas
+  preflightContinue: false,
+  optionsSuccessStatus: 204
+};
+
+// IMPORTANTE: Tratar OPTIONS ANTES de qualquer outro middleware
+// Isso evita problemas com redirects em requisições preflight
+app.options('*', cors(corsOptions), (req, res) => {
+  res.sendStatus(204);
+});
+
+app.use(cors(corsOptions));
 app.use(express.json());
 
-// Rotas
-app.use('/api/auth', authRoutes);
-app.use('/api/transactions', transactionsRoutes);
-app.use('/api/budgets', budgetsRoutes);
-app.use('/api/goals', goalsRoutes);
-app.use('/api/webhook', webhookRoutes);
-app.use('/api/user', userRoutes);
-
-// Rota raiz
+// Rota raiz (antes das rotas de API)
 app.get('/', (req, res) => {
   res.json({ 
     status: 'ok', 
@@ -35,10 +68,19 @@ app.get('/', (req, res) => {
       budgets: '/api/budgets',
       goals: '/api/goals',
       user: '/api/user',
-      webhook: '/api/webhook'
+      webhook: '/api/webhook',
+      health: '/api/health'
     }
   });
 });
+
+// Rotas
+app.use('/api/auth', authRoutes);
+app.use('/api/transactions', transactionsRoutes);
+app.use('/api/budgets', budgetsRoutes);
+app.use('/api/goals', goalsRoutes);
+app.use('/api/webhook', webhookRoutes);
+app.use('/api/user', userRoutes);
 
 // Rota de health check
 app.get('/api/health', (req, res) => {
@@ -47,40 +89,10 @@ app.get('/api/health', (req, res) => {
 
 // Inicializar banco de dados
 let dbInitialized = false;
-let dbInitializing = false;
-
 async function initDbIfNeeded() {
-  if (dbInitialized) {
-    return;
-  }
-  
-  if (dbInitializing) {
-    // Aguardar enquanto está inicializando (com timeout de 10 segundos)
-    const startTime = Date.now();
-    while (dbInitializing && (Date.now() - startTime < 10000)) {
-      await new Promise(resolve => setTimeout(resolve, 100));
-    }
-    if (dbInitializing) {
-      throw new Error('Timeout ao inicializar banco de dados');
-    }
-    return;
-  }
-  
-  try {
-    dbInitializing = true;
-    // Timeout de 10 segundos para inicialização
-    const initPromise = initDatabase();
-    const timeoutPromise = new Promise((_, reject) => 
-      setTimeout(() => reject(new Error('Timeout ao inicializar banco de dados')), 10000)
-    );
-    
-    await Promise.race([initPromise, timeoutPromise]);
+  if (!dbInitialized) {
+    await initDatabase();
     dbInitialized = true;
-  } catch (error) {
-    console.error('❌ Erro ao inicializar banco de dados:', error);
-    throw error;
-  } finally {
-    dbInitializing = false;
   }
 }
 
@@ -100,24 +112,31 @@ if (process.env.VERCEL !== '1') {
   }
   startServer();
 } else {
-  // No Vercel, inicializar DB apenas uma vez quando o handler for chamado
-  // Usar um middleware que só inicializa se necessário e trata erros
+  // No Vercel, inicializar DB quando o handler for chamado
+  // Pular para requisições OPTIONS (preflight) e rotas de health check
   app.use(async (req, res, next) => {
+    // Não inicializar banco para requisições OPTIONS ou health check
+    if (req.method === 'OPTIONS' || req.path === '/api/health' || req.path === '/') {
+      return next();
+    }
+    
     try {
-      // Pular inicialização para rotas de health check
-      if (req.path === '/api/health' || req.path === '/') {
-        return next();
-      }
-      
       await initDbIfNeeded();
       next();
     } catch (error) {
       console.error('❌ Erro ao inicializar banco:', error);
+      console.error('❌ Stack:', error.stack);
       // Garantir que sempre retornamos uma resposta para evitar loops
       if (!res.headersSent) {
+        const errorMessage = error.message || 'Erro desconhecido';
+        const errorType = error.constructor.name;
+        
         res.status(500).json({ 
           error: 'Erro ao conectar ao banco de dados',
-          message: process.env.NODE_ENV === 'production' ? 'Erro interno do servidor' : error.message 
+          message: errorMessage,
+          type: errorType,
+          hasDatabaseUrl: !!process.env.DATABASE_URL,
+          ...(process.env.NODE_ENV !== 'production' && { stack: error.stack })
         });
       }
     }

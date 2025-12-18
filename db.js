@@ -82,11 +82,20 @@ let pool = null;
 function getPool() {
   if (!pool) {
     if (!process.env.DATABASE_URL) {
-      throw new Error('DATABASE_URL não está configurada');
+      const errorMsg = 'DATABASE_URL não está configurada. Configure esta variável de ambiente no Vercel (Settings > Environment Variables).';
+      console.error('❌', errorMsg);
+      throw new Error(errorMsg);
     }
     
-    console.log('🔗 Criando conexão com banco de dados Supabase...');
-    console.log('📋 Host:', process.env.DATABASE_URL.match(/@([^:]+):/)?.[1] || 'não encontrado');
+    console.log('🔗 Criando conexão com banco de dados...');
+    try {
+      const hostMatch = process.env.DATABASE_URL.match(/@([^:]+):/);
+      const host = hostMatch ? hostMatch[1] : 'não encontrado';
+      console.log('📋 Host:', host);
+      console.log('📋 Database URL configurada:', process.env.DATABASE_URL ? 'Sim' : 'Não');
+    } catch (e) {
+      console.log('⚠️ Não foi possível extrair informações da URL');
+    }
 
     // Configurar pool com connection string
     const poolConfig = {
@@ -116,12 +125,32 @@ function getPool() {
 // Testar conexão antes de criar tabelas
 export async function testConnection() {
   try {
+    if (!process.env.DATABASE_URL) {
+      throw new Error('DATABASE_URL não está configurada');
+    }
+    
     const dbPool = getPool();
+    console.log('🔄 Executando query de teste...');
     const result = await dbPool.query('SELECT NOW()');
     console.log('✅ Conexão com banco de dados estabelecida:', result.rows[0].now);
     return true;
   } catch (error) {
-    console.error('❌ Erro ao conectar ao banco de dados:', error.message);
+    console.error('❌ Erro ao conectar ao banco de dados:');
+    console.error('   Mensagem:', error.message);
+    console.error('   Código:', error.code);
+    console.error('   Tipo:', error.constructor.name);
+    
+    // Mensagens de erro mais específicas
+    if (error.code === 'ENOTFOUND') {
+      throw new Error(`Host do banco de dados não encontrado. Verifique se a DATABASE_URL está correta.`);
+    } else if (error.code === 'ECONNREFUSED') {
+      throw new Error(`Conexão recusada pelo banco de dados. Verifique se o servidor está acessível.`);
+    } else if (error.code === '28P01') {
+      throw new Error(`Falha na autenticação. Verifique usuário e senha na DATABASE_URL.`);
+    } else if (error.code === '3D000') {
+      throw new Error(`Banco de dados não existe. Verifique o nome do banco na DATABASE_URL.`);
+    }
+    
     throw error;
   }
 }
@@ -129,7 +158,23 @@ export async function testConnection() {
 // Criar tabelas se não existirem
 export async function initDatabase() {
   try {
+    // Verificar se DATABASE_URL está configurada
+    if (!process.env.DATABASE_URL) {
+      throw new Error('DATABASE_URL não está configurada. Configure esta variável de ambiente no Vercel.');
+    }
+    
     const dbPool = getPool();
+    
+    // Testar conexão primeiro antes de criar tabelas
+    console.log('🔍 Testando conexão com banco de dados...');
+    try {
+      await testConnection();
+      console.log('✅ Conexão testada com sucesso');
+    } catch (error) {
+      console.error('❌ Falha ao testar conexão:', error.message);
+      throw new Error(`Falha ao conectar ao banco de dados: ${error.message}`);
+    }
+    
     // Tabela de usuários
     await dbPool.query(`
       CREATE TABLE IF NOT EXISTS users (
