@@ -50,8 +50,26 @@ const corsOptions = {
 
 // IMPORTANTE: Tratar OPTIONS ANTES de qualquer outro middleware
 // Isso evita problemas com redirects em requisições preflight
-app.options('*', cors(corsOptions), (req, res) => {
-  res.sendStatus(204);
+app.options('*', (req, res) => {
+  // Configurar headers CORS manualmente para garantir que não há redirect
+  const origin = req.headers.origin;
+  
+  // Verificar se a origem é permitida
+  const isAllowed = !origin || 
+    origin.includes('.vercel.app') ||
+    origin.includes('localhost') ||
+    origin.includes('127.0.0.1');
+  
+  if (isAllowed) {
+    res.setHeader('Access-Control-Allow-Origin', origin || '*');
+    res.setHeader('Access-Control-Allow-Methods', 'GET, POST, PUT, DELETE, OPTIONS, PATCH');
+    res.setHeader('Access-Control-Allow-Headers', 'Content-Type, Authorization, X-Requested-With');
+    res.setHeader('Access-Control-Allow-Credentials', 'true');
+    res.setHeader('Access-Control-Max-Age', '86400');
+  }
+  
+  // Sempre retornar 204 sem redirect
+  res.status(204).end();
 });
 
 app.use(cors(corsOptions));
