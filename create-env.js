@@ -5,7 +5,7 @@ import { fileURLToPath } from 'url';
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = dirname(__filename);
 
-const envContent = `DATABASE_URL=postgresql://postgres:$$Ca*8627058##$$@db.msuthinujxghpoygotqh.supabase.co:5432/postgres
+const envContent = `DATABASE_URL=postgresql://postgres:CA8627058090@db.msuthinujxghpoygotqh.supabase.co:5432/postgres
 JWT_SECRET=monetize-speed-secret-key-change-in-production
 PORT=3000
 `;
