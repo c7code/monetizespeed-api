@@ -1,5 +1,5 @@
 import express from 'express';
-import pool from '../db.js';
+import getPool from '../db.js';
 import { authenticateToken } from './auth.js';
 
 const router = express.Router();
@@ -10,6 +10,7 @@ router.use(authenticateToken);
 // Listar orçamentos do usuário
 router.get('/', async (req, res) => {
   try {
+    const pool = getPool();
     const result = await pool.query(
       'SELECT id, category, limit_amount as limit FROM budgets WHERE user_id = $1 ORDER BY category',
       [req.user.userId]
@@ -30,6 +31,7 @@ router.post('/', async (req, res) => {
       return res.status(400).json({ error: 'Campos obrigatórios: category, limit' });
     }
 
+    const pool = getPool();
     // Verificar se já existe orçamento para essa categoria
     const existing = await pool.query(
       'SELECT id FROM budgets WHERE user_id = $1 AND category = $2',
@@ -64,6 +66,7 @@ router.put('/:id', async (req, res) => {
     const { id } = req.params;
     const { category, limit } = req.body;
 
+    const pool = getPool();
     // Verificar se o orçamento pertence ao usuário
     const check = await pool.query('SELECT id FROM budgets WHERE id = $1 AND user_id = $2', [id, req.user.userId]);
     if (check.rows.length === 0) {
@@ -90,6 +93,7 @@ router.delete('/:id', async (req, res) => {
   try {
     const { id } = req.params;
 
+    const pool = getPool();
     const result = await pool.query(
       'DELETE FROM budgets WHERE id = $1 AND user_id = $2 RETURNING id',
       [id, req.user.userId]

@@ -1,7 +1,7 @@
 import express from 'express';
 import bcrypt from 'bcryptjs';
 import jwt from 'jsonwebtoken';
-import pool from '../db.js';
+import getPool from '../db.js';
 
 const router = express.Router();
 
@@ -20,6 +20,7 @@ router.post('/register', async (req, res) => {
     }
 
     // Verificar se o usuário já existe
+    const pool = getPool();
     const userExists = await pool.query(
       'SELECT id FROM users WHERE email = $1',
       [email.toLowerCase()]
@@ -74,6 +75,7 @@ router.post('/login', async (req, res) => {
     }
 
     // Buscar usuário
+    const pool = getPool();
     const result = await pool.query(
       'SELECT id, email, password_hash, name FROM users WHERE email = $1',
       [email.toLowerCase()]
@@ -135,6 +137,7 @@ export function authenticateToken(req, res, next) {
 // Rota para verificar token válido
 router.get('/verify', authenticateToken, async (req, res) => {
   try {
+    const pool = getPool();
     const result = await pool.query(
       'SELECT id, email, name FROM users WHERE id = $1',
       [req.user.userId]

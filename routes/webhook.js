@@ -1,5 +1,5 @@
 import express from 'express';
-import pool from '../db.js';
+import getPool from '../db.js';
 import { authenticateToken } from './auth.js';
 
 const router = express.Router();
@@ -141,6 +141,7 @@ router.post('/whatsapp', async (req, res) => {
       }
       
       // Buscar usuário pelo número do WhatsApp
+      const pool = getPool();
       const userResult = await pool.query(
         'SELECT id FROM users WHERE whatsapp_number = $1 OR whatsapp_number = $2',
         [phoneNumber, phoneNumber.replace(/^55/, '')] // Tenta com e sem código do país
@@ -217,6 +218,7 @@ router.post('/whatsapp', async (req, res) => {
     }
     
     // Criar transação
+    const pool = getPool();
     const result = await pool.query(
       `INSERT INTO transactions (user_id, type, category, amount, date, description, status)
        VALUES ($1, $2, $3, $4, $5, $6, $7)

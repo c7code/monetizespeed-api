@@ -1,5 +1,5 @@
 import express from 'express';
-import pool from '../db.js';
+import getPool from '../db.js';
 import { authenticateToken } from './auth.js';
 
 const router = express.Router();
@@ -10,6 +10,7 @@ router.use(authenticateToken);
 // Listar transações do usuário
 router.get('/', async (req, res) => {
   try {
+    const pool = getPool();
     const result = await pool.query(
       'SELECT * FROM transactions WHERE user_id = $1 ORDER BY date DESC, created_at DESC',
       [req.user.userId]
@@ -30,6 +31,7 @@ router.post('/', async (req, res) => {
       return res.status(400).json({ error: 'Campos obrigatórios: type, category, amount, date' });
     }
 
+    const pool = getPool();
     const result = await pool.query(
       `INSERT INTO transactions (user_id, type, category, amount, date, description, recurring, status, receipt_url)
        VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)
@@ -50,6 +52,7 @@ router.put('/:id', async (req, res) => {
     const { id } = req.params;
     const { type, category, amount, date, description, recurring, status, receipt_url } = req.body;
 
+    const pool = getPool();
     // Verificar se a transação pertence ao usuário
     const check = await pool.query('SELECT id FROM transactions WHERE id = $1 AND user_id = $2', [id, req.user.userId]);
     if (check.rows.length === 0) {
@@ -76,6 +79,7 @@ router.delete('/:id', async (req, res) => {
   try {
     const { id } = req.params;
 
+    const pool = getPool();
     const result = await pool.query(
       'DELETE FROM transactions WHERE id = $1 AND user_id = $2 RETURNING id',
       [id, req.user.userId]

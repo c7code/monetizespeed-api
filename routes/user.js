@@ -1,5 +1,5 @@
 import express from 'express';
-import pool from '../db.js';
+import getPool from '../db.js';
 import { authenticateToken } from './auth.js';
 
 const router = express.Router();
@@ -22,6 +22,7 @@ router.put('/whatsapp', async (req, res) => {
       return res.status(400).json({ error: 'Número inválido' });
     }
     
+    const pool = getPool();
     const result = await pool.query(
       'UPDATE users SET whatsapp_number = $1, updated_at = CURRENT_TIMESTAMP WHERE id = $2 RETURNING id, email, whatsapp_number',
       [cleanNumber, req.user.userId]
@@ -44,6 +45,7 @@ router.put('/whatsapp', async (req, res) => {
 // Obter informações do usuário
 router.get('/me', async (req, res) => {
   try {
+    const pool = getPool();
     const result = await pool.query(
       'SELECT id, email, name, whatsapp_number, created_at FROM users WHERE id = $1',
       [req.user.userId]
