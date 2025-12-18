@@ -22,28 +22,43 @@ function sanitizeDatabaseUrl(url) {
     throw new Error('DATABASE_URL deve começar com postgres:// ou postgresql://');
   }
   
-  // Tentar fazer parse da URL para validar formato
+  // Tentar fazer parse da URL para validar formato e codificar senha
   try {
-    // Extrair componentes básicos
-    const match = cleanUrl.match(/^(postgresql?):\/\/([^:]+):([^@]+)@(.+)$/);
-    if (!match) {
-      throw new Error('Formato inválido da DATABASE_URL');
+    // Dividir a URL em partes: protocolo, credenciais, resto
+    const urlParts = cleanUrl.match(/^(postgresql?):\/\/(.+?)@(.+)$/);
+    if (!urlParts) {
+      throw new Error('Formato inválido da DATABASE_URL. Formato esperado: postgresql://user:password@host:port/database');
     }
     
-    const [, protocol, user, password, rest] = match;
+    const [, protocol, credentials, rest] = urlParts;
     
-    // Se a senha não estiver codificada e tiver caracteres especiais, codificar
-    if (password && (password.includes('$') || password.includes('#') || password.includes('@') || password.includes('&'))) {
-      const encodedPassword = encodeURIComponent(password);
-      cleanUrl = `${protocol}://${user}:${encodedPassword}@${rest}`;
+    // Separar usuário e senha (a senha pode conter qualquer caractere exceto @)
+    const credParts = credentials.split(':');
+    if (credParts.length < 2) {
+      throw new Error('Formato inválido: usuário e senha não encontrados');
+    }
+    
+    const user = credParts[0];
+    // A senha é tudo depois do primeiro : até o @
+    const password = credParts.slice(1).join(':');
+    
+    // SEMPRE codificar a senha para evitar problemas com caracteres especiais
+    // Verificar se já está codificada (contém %)
+    let finalPassword = password;
+    if (!password.includes('%') || decodeURIComponent(password) !== password) {
+      // Se não está codificada ou a decodificação muda o valor, codificar
+      finalPassword = encodeURIComponent(password);
       console.log('✅ Senha codificada para URL');
     }
+    
+    // Reconstruir a URL com a senha codificada
+    cleanUrl = `${protocol}://${user}:${finalPassword}@${rest}`;
     
     return cleanUrl;
   } catch (error) {
     console.error('⚠️ Erro ao sanitizar DATABASE_URL:', error.message);
-    // Retornar URL original se não conseguir sanitizar
-    return cleanUrl;
+    console.error('⚠️ URL original:', cleanUrl.substring(0, 50) + '...');
+    throw error;
   }
 }
 
@@ -136,12 +151,28 @@ function getPool() {
     
     console.log('🔗 Criando conexão com banco de dados...');
     try {
-      const hostMatch = databaseUrl.match(/@([^:]+):/);
-      const host = hostMatch ? hostMatch[1] : 'não encontrado';
-      console.log('📋 Host:', host);
+      // Extrair informações da URL para debug
+      const urlMatch = databaseUrl.match(/@([^:]+):(\d+)\/(.+)$/);
+      if (urlMatch) {
+        const [, host, port, database] = urlMatch;
+        console.log('📋 Host:', host);
+        console.log('📋 Port:', port);
+        console.log('📋 Database:', database);
+      } else {
+        // Tentar formato alternativo sem porta explícita
+        const urlMatch2 = databaseUrl.match(/@([^/]+)\/(.+)$/);
+        if (urlMatch2) {
+          const [, host, database] = urlMatch2;
+          console.log('📋 Host:', host);
+          console.log('📋 Database:', database);
+        } else {
+          console.log('⚠️ Não foi possível extrair informações completas da URL');
+          console.log('📋 URL (primeiros 80 caracteres):', databaseUrl.substring(0, 80) + '...');
+        }
+      }
       console.log('📋 Database URL válida: Sim');
     } catch (e) {
-      console.log('⚠️ Não foi possível extrair informações da URL');
+      console.log('⚠️ Não foi possível extrair informações da URL:', e.message);
     }
 
     // Configurar pool com connection string
