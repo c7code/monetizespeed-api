@@ -25,6 +25,8 @@ const corsOptions = {
       'http://127.0.0.1:5173',
       'https://monetizespeed-client-black.vercel.app',
       'https://monetizespeed-client.vercel.app',
+      'https://www.monetizespeed.com',
+      'https://monetizespeed.com',
     ];
     
     // Permite qualquer subdomínio do Vercel
@@ -58,7 +60,9 @@ app.options('*', (req, res) => {
   const isAllowed = !origin || 
     origin.includes('.vercel.app') ||
     origin.includes('localhost') ||
-    origin.includes('127.0.0.1');
+    origin.includes('127.0.0.1') ||
+    origin === 'https://www.monetizespeed.com' ||
+    origin === 'https://monetizespeed.com';
   
   if (isAllowed) {
     res.setHeader('Access-Control-Allow-Origin', origin || '*');
