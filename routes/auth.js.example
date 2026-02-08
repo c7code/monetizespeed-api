@@ -1,0 +1,58 @@
+// Exemplo de como integrar envio de email no registro
+// Este é um exemplo - não substitua o arquivo original ainda!
+
+import express from 'express';
+import bcrypt from 'bcryptjs';
+import jwt from 'jsonwebtoken';
+import getPool from '../db.js';
+// Importar serviço de email (após criar)
+// import { sendWelcomeEmail } from '../services/email.js';
+
+const router = express.Router();
+
+// Cadastro de usuário COM envio de email
+router.post('/register', async (req, res) => {
+  try {
+    const { email, password, name } = req.body;
+
+    // ... validações existentes ...
+
+    // Criar usuário
+    const result = await pool.query(
+      'INSERT INTO users (email, password_hash, name) VALUES ($1, $2, $3) RETURNING id, email, name, created_at',
+      [email.toLowerCase(), passwordHash, name || null]
+    );
+
+    const user = result.rows[0];
+
+    // Gerar token JWT
+    const token = jwt.sign(
+      { userId: user.id, email: user.email },
+      process.env.JWT_SECRET,
+      { expiresIn: '30d' }
+    );
+
+    // ✨ ENVIAR EMAIL DE BOAS-VINDAS
+    // Não falhar o registro se o email falhar
+    try {
+      // await sendWelcomeEmail(user.email, user.name || 'Usuário');
+      console.log('Email de boas-vindas enviado para:', user.email);
+    } catch (emailError) {
+      // Log do erro mas não interrompe o registro
+      console.error('Erro ao enviar email (usuário foi criado):', emailError);
+    }
+
+    res.status(201).json({
+      message: 'Usuário criado com sucesso',
+      token,
+      user: {
+        id: user.id,
+        email: user.email,
+        name: user.name
+      }
+    });
+  } catch (error) {
+    console.error('Erro no cadastro:', error);
+    res.status(500).json({ error: 'Erro ao cadastrar usuário' });
+  }
+});

@@ -1,6 +1,6 @@
+import 'dotenv/config';
 import express from 'express';
 import cors from 'cors';
-// Carregar db.js primeiro para garantir que as variáveis de ambiente sejam carregadas
 import { initDatabase } from './db.js';
 import authRoutes from './routes/auth.js';
 import transactionsRoutes from './routes/transactions.js';
@@ -8,17 +8,20 @@ import budgetsRoutes from './routes/budgets.js';
 import goalsRoutes from './routes/goals.js';
 import webhookRoutes from './routes/webhook.js';
 import userRoutes from './routes/user.js';
+import creditCardsRoutes from './routes/creditCards.js';
+import walletsRoutes from './routes/wallets.js';
+import streamingsRoutes from './routes/streamings.js';
+import billsRoutes from './routes/bills.js';
+import receivablesRoutes from './routes/receivables.js';
+import audioRoutes from './routes/audio.js';
 
 const app = express();
 const PORT = process.env.PORT || 3000;
 
-// Middleware CORS - Configurado para aceitar requisições do frontend
 const corsOptions = {
   origin: function (origin, callback) {
-    // Permite requisições sem origin (mobile apps, Postman, etc)
     if (!origin) return callback(null, true);
-    
-    // Lista de origens permitidas
+
     const allowedOrigins = [
       'http://localhost:5173',
       'http://localhost:3000',
@@ -28,13 +31,11 @@ const corsOptions = {
       'https://www.monetizespeed.com',
       'https://monetizespeed.com',
     ];
-    
-    // Permite qualquer subdomínio do Vercel
+
     if (origin.includes('.vercel.app')) {
       return callback(null, true);
     }
-    
-    // Verifica se a origem está na lista permitida
+
     if (allowedOrigins.includes(origin)) {
       callback(null, true);
     } else {
@@ -50,20 +51,17 @@ const corsOptions = {
   optionsSuccessStatus: 204
 };
 
-// IMPORTANTE: Tratar OPTIONS ANTES de qualquer outro middleware
-// Isso evita problemas com redirects em requisições preflight
+
 app.options('*', (req, res) => {
-  // Configurar headers CORS manualmente para garantir que não há redirect
   const origin = req.headers.origin;
-  
-  // Verificar se a origem é permitida
-  const isAllowed = !origin || 
+
+  const isAllowed = !origin ||
     origin.includes('.vercel.app') ||
     origin.includes('localhost') ||
     origin.includes('127.0.0.1') ||
     origin === 'https://www.monetizespeed.com' ||
     origin === 'https://monetizespeed.com';
-  
+
   if (isAllowed) {
     res.setHeader('Access-Control-Allow-Origin', origin || '*');
     res.setHeader('Access-Control-Allow-Methods', 'GET, POST, PUT, DELETE, OPTIONS, PATCH');
@@ -71,18 +69,16 @@ app.options('*', (req, res) => {
     res.setHeader('Access-Control-Allow-Credentials', 'true');
     res.setHeader('Access-Control-Max-Age', '86400');
   }
-  
-  // Sempre retornar 204 sem redirect
+
   res.status(204).end();
 });
 
 app.use(cors(corsOptions));
 app.use(express.json());
 
-// Rota raiz (antes das rotas de API)
 app.get('/', (req, res) => {
-  res.json({ 
-    status: 'ok', 
+  res.json({
+    status: 'ok',
     message: 'MonetizeSpeed API está funcionando',
     endpoints: {
       auth: '/api/auth',
@@ -91,25 +87,32 @@ app.get('/', (req, res) => {
       goals: '/api/goals',
       user: '/api/user',
       webhook: '/api/webhook',
+      creditCards: '/api/credit-cards',
+      wallets: '/api/wallets',
+      streamings: '/api/streamings',
+      bills: '/api/bills',
       health: '/api/health'
     }
   });
 });
 
-// Rotas
 app.use('/api/auth', authRoutes);
 app.use('/api/transactions', transactionsRoutes);
 app.use('/api/budgets', budgetsRoutes);
 app.use('/api/goals', goalsRoutes);
 app.use('/api/webhook', webhookRoutes);
 app.use('/api/user', userRoutes);
+app.use('/api/credit-cards', creditCardsRoutes);
+app.use('/api/wallets', walletsRoutes);
+app.use('/api/streamings', streamingsRoutes);
+app.use('/api/bills', billsRoutes);
+app.use('/api/receivables', receivablesRoutes);
+app.use('/api/audio', audioRoutes);
 
-// Rota de health check
 app.get('/api/health', (req, res) => {
   res.json({ status: 'ok', message: 'MonetizeSpeed API está funcionando' });
 });
 
-// Inicializar banco de dados
 let dbInitialized = false;
 async function initDbIfNeeded() {
   if (!dbInitialized) {
@@ -118,7 +121,6 @@ async function initDbIfNeeded() {
   }
 }
 
-// Inicializar banco de dados e servidor (apenas em ambiente local)
 if (process.env.VERCEL !== '1') {
   async function startServer() {
     try {
@@ -134,26 +136,22 @@ if (process.env.VERCEL !== '1') {
   }
   startServer();
 } else {
-  // No Vercel, inicializar DB quando o handler for chamado
-  // Pular para requisições OPTIONS (preflight) e rotas de health check
   app.use(async (req, res, next) => {
-    // Não inicializar banco para requisições OPTIONS ou health check
     if (req.method === 'OPTIONS' || req.path === '/api/health' || req.path === '/') {
       return next();
     }
-    
+
     try {
       await initDbIfNeeded();
       next();
     } catch (error) {
       console.error('❌ Erro ao inicializar banco:', error);
       console.error('❌ Stack:', error.stack);
-      // Garantir que sempre retornamos uma resposta para evitar loops
       if (!res.headersSent) {
         const errorMessage = error.message || 'Erro desconhecido';
         const errorType = error.constructor.name;
-        
-        res.status(500).json({ 
+
+        res.status(500).json({
           error: 'Erro ao conectar ao banco de dados',
           message: errorMessage,
           type: errorType,
@@ -165,6 +163,5 @@ if (process.env.VERCEL !== '1') {
   });
 }
 
-// Exportar para Vercel
 export default app;
 

@@ -6,7 +6,6 @@ import { existsSync } from 'fs';
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = dirname(__filename);
 
-// Verificar se o arquivo .env existe
 const envPath = join(__dirname, '.env');
 if (!existsSync(envPath)) {
   console.error('❌ Arquivo .env não encontrado!');

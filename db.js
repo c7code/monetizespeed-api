@@ -11,58 +11,48 @@ function sanitizeDatabaseUrl(url) {
   if (!url || typeof url !== 'string') {
     throw new Error('DATABASE_URL deve ser uma string válida');
   }
-  
+
   let cleanUrl = url.trim();
-  
-  // Remover espaços e quebras de linha
+
   cleanUrl = cleanUrl.replace(/\s+/g, '');
-  
-  // Verificar se começa com postgres:// ou postgresql://
+
   if (!cleanUrl.startsWith('postgres://') && !cleanUrl.startsWith('postgresql://')) {
     throw new Error('DATABASE_URL deve começar com postgres:// ou postgresql://');
   }
-  
-  // Tentar fazer parse da URL para validar formato e codificar senha
+
   try {
-    // Dividir a URL em partes: protocolo, credenciais, resto
     const urlParts = cleanUrl.match(/^(postgresql?):\/\/(.+?)@(.+)$/);
     if (!urlParts) {
       throw new Error('Formato inválido da DATABASE_URL. Formato esperado: postgresql://user:password@host:port/database');
     }
-    
+
     const [, protocol, credentials, rest] = urlParts;
-    
-    // Separar usuário e senha (a senha pode conter qualquer caractere exceto @)
+
     const credParts = credentials.split(':');
     if (credParts.length < 2) {
       throw new Error('Formato inválido: usuário e senha não encontrados');
     }
-    
+
     const user = credParts[0];
-    // A senha é tudo depois do primeiro : até o @
     const password = credParts.slice(1).join(':');
-    
-    // SEMPRE codificar a senha para evitar problemas com caracteres especiais
-    // Verificar se já está codificada (contém %)
+
+
     let finalPassword = password;
     if (!password.includes('%') || decodeURIComponent(password) !== password) {
-      // Se não está codificada ou a decodificação muda o valor, codificar
       finalPassword = encodeURIComponent(password);
       console.log('✅ Senha codificada para URL');
     }
-    
-    // Reconstruir a URL com a senha codificada
+
     cleanUrl = `${protocol}://${user}:${finalPassword}@${rest}`;
-    
-    // Validar que o hostname ainda está presente após a reconstrução
+
     const hostMatch = cleanUrl.match(/@([^:]+):/);
     if (!hostMatch) {
       throw new Error('Hostname não encontrado após sanitização da URL');
     }
-    
+
     console.log('✅ URL sanitizada com sucesso');
     console.log('📋 Hostname:', hostMatch[1]);
-    
+
     return cleanUrl;
   } catch (error) {
     console.error('⚠️ Erro ao sanitizar DATABASE_URL:', error.message);
@@ -71,21 +61,17 @@ function sanitizeDatabaseUrl(url) {
   }
 }
 
-// Carregar variáveis de ambiente
-// No Vercel, as variáveis já vêm de process.env
-// Localmente, tentamos carregar do arquivo .env
+
 if (!process.env.DATABASE_URL) {
   const envPath = join(__dirname, '.env');
   if (!existsSync(envPath)) {
     console.error('❌ Arquivo .env não encontrado em:', envPath);
     console.log('📝 Crie um arquivo .env na pasta server com a string de conexão');
     console.log('⚠️ Ou configure as variáveis de ambiente no Vercel');
-    // Não fazer process.exit(1) aqui para permitir que o Vercel tente usar variáveis de ambiente
     if (process.env.VERCEL !== '1') {
       process.exit(1);
     }
   } else {
-    // Carregar .env manualmente para evitar problemas com caracteres especiais
     const envContent = readFileSync(envPath, 'utf8');
     const envLines = envContent.split('\n').filter(line => line.trim() && !line.startsWith('#'));
 
@@ -105,17 +91,14 @@ if (!process.env.DATABASE_URL) {
       }
     });
 
-    // Sanitizar a URL do .env
     if (databaseUrl) {
       try {
         databaseUrl = sanitizeDatabaseUrl(databaseUrl);
       } catch (error) {
         console.error('⚠️ Erro ao sanitizar DATABASE_URL do .env:', error.message);
-        // Continuar com a URL original
       }
     }
 
-    // Definir variáveis de ambiente manualmente
     process.env.DATABASE_URL = databaseUrl;
     process.env.JWT_SECRET = jwtSecret;
     process.env.PORT = port;
@@ -124,13 +107,11 @@ if (!process.env.DATABASE_URL) {
 
 const { Pool } = pg;
 
-// Verificar se a variável de ambiente está definida e sanitizar
 if (process.env.DATABASE_URL) {
   try {
     process.env.DATABASE_URL = sanitizeDatabaseUrl(process.env.DATABASE_URL);
   } catch (error) {
     console.error('❌ Erro ao processar DATABASE_URL:', error.message);
-    // Não fazer exit no Vercel
     if (process.env.VERCEL !== '1') {
       process.exit(1);
     }
@@ -138,13 +119,11 @@ if (process.env.DATABASE_URL) {
 } else {
   console.error('❌ DATABASE_URL não encontrada');
   console.log('📝 Configure DATABASE_URL nas variáveis de ambiente do Vercel ou no arquivo .env');
-  // Não fazer exit no Vercel, deixar que o erro seja tratado quando tentar usar o pool
   if (process.env.VERCEL !== '1') {
     process.exit(1);
   }
 }
 
-// Criar pool apenas quando necessário (lazy initialization)
 let pool = null;
 
 function getPool() {
@@ -154,13 +133,11 @@ function getPool() {
       console.error('❌', errorMsg);
       throw new Error(errorMsg);
     }
-    
-    // A DATABASE_URL já foi sanitizada no início do arquivo
+
     const databaseUrl = process.env.DATABASE_URL;
-    
+
     console.log('🔗 Criando conexão com banco de dados...');
     try {
-      // Extrair informações da URL para debug
       const urlMatch = databaseUrl.match(/@([^:]+):(\d+)\/(.+)$/);
       if (urlMatch) {
         const [, host, port, database] = urlMatch;
@@ -168,7 +145,6 @@ function getPool() {
         console.log('📋 Port:', port);
         console.log('📋 Database:', database);
       } else {
-        // Tentar formato alternativo sem porta explícita
         const urlMatch2 = databaseUrl.match(/@([^/]+)\/(.+)$/);
         if (urlMatch2) {
           const [, host, database] = urlMatch2;
@@ -184,7 +160,6 @@ function getPool() {
       console.log('⚠️ Não foi possível extrair informações da URL:', e.message);
     }
 
-    // Configurar pool com connection string
     const poolConfig = {
       connectionString: databaseUrl,
       ssl: {
@@ -201,16 +176,14 @@ function getPool() {
       console.error('❌ Erro ao criar Pool:');
       console.error('   Mensagem:', error.message);
       console.error('   Stack:', error.stack);
-      
-      // Se o erro menciona searchParams, pode ser problema com formato da URL
+
       if (error.message && error.message.includes('searchParams')) {
         throw new Error('Formato inválido da DATABASE_URL. Verifique se a URL está correta e se caracteres especiais estão codificados (use encodeURIComponent para senhas com caracteres especiais).');
       }
-      
+
       throw new Error(`Erro ao criar pool de conexões: ${error.message}`);
     }
 
-    // Testar conexão
     pool.on('connect', () => {
       console.log('✅ Conectado ao banco de dados Supabase');
     });
@@ -222,13 +195,12 @@ function getPool() {
   return pool;
 }
 
-// Testar conexão antes de criar tabelas
 export async function testConnection() {
   try {
     if (!process.env.DATABASE_URL) {
       throw new Error('DATABASE_URL não está configurada');
     }
-    
+
     const dbPool = getPool();
     console.log('🔄 Executando query de teste...');
     const result = await dbPool.query('SELECT NOW()');
@@ -239,8 +211,7 @@ export async function testConnection() {
     console.error('   Mensagem:', error.message);
     console.error('   Código:', error.code);
     console.error('   Tipo:', error.constructor.name);
-    
-    // Mensagens de erro mais específicas
+
     if (error.code === 'ENOTFOUND') {
       const hostMatch = error.message?.match(/getaddrinfo ENOTFOUND (.+)/);
       const host = hostMatch ? hostMatch[1] : 'host desconhecido';
@@ -254,22 +225,19 @@ export async function testConnection() {
     } else if (error.code === '3D000') {
       throw new Error(`Banco de dados não existe. Verifique o nome do banco na DATABASE_URL.`);
     }
-    
+
     throw error;
   }
 }
 
-// Criar tabelas se não existirem
 export async function initDatabase() {
   try {
-    // Verificar se DATABASE_URL está configurada
     if (!process.env.DATABASE_URL) {
       throw new Error('DATABASE_URL não está configurada. Configure esta variável de ambiente no Vercel.');
     }
-    
+
     const dbPool = getPool();
-    
-    // Testar conexão primeiro antes de criar tabelas
+
     console.log('🔍 Testando conexão com banco de dados...');
     try {
       await testConnection();
@@ -278,8 +246,7 @@ export async function initDatabase() {
       console.error('❌ Falha ao testar conexão:', error.message);
       throw new Error(`Falha ao conectar ao banco de dados: ${error.message}`);
     }
-    
-    // Tabela de usuários
+
     await dbPool.query(`
       CREATE TABLE IF NOT EXISTS users (
         id SERIAL PRIMARY KEY,
@@ -291,8 +258,7 @@ export async function initDatabase() {
         updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
       )
     `);
-    
-    // Adicionar coluna whatsapp_number se não existir (para bancos já criados)
+
     await dbPool.query(`
       DO $$ 
       BEGIN
@@ -305,7 +271,6 @@ export async function initDatabase() {
       END $$;
     `);
 
-    // Tabela de transações
     await dbPool.query(`
       CREATE TABLE IF NOT EXISTS transactions (
         id SERIAL PRIMARY KEY,
@@ -323,7 +288,6 @@ export async function initDatabase() {
       )
     `);
 
-    // Tabela de orçamentos
     await dbPool.query(`
       CREATE TABLE IF NOT EXISTS budgets (
         id SERIAL PRIMARY KEY,
@@ -336,7 +300,6 @@ export async function initDatabase() {
       )
     `);
 
-    // Tabela de metas
     await dbPool.query(`
       CREATE TABLE IF NOT EXISTS goals (
         id SERIAL PRIMARY KEY,
@@ -349,6 +312,90 @@ export async function initDatabase() {
       )
     `);
 
+    await dbPool.query(`
+      CREATE TABLE IF NOT EXISTS credit_cards (
+        id SERIAL PRIMARY KEY,
+        user_id INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+        name VARCHAR(255) NOT NULL,
+        limit_amount DECIMAL(10, 2) NOT NULL,
+        total_spent DECIMAL(10, 2) DEFAULT 0,
+        closing_day INTEGER CHECK (closing_day >= 1 AND closing_day <= 31),
+        due_day INTEGER CHECK (due_day >= 1 AND due_day <= 31),
+        created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+        updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+      )
+    `);
+
+    await dbPool.query(`
+      CREATE TABLE IF NOT EXISTS wallets (
+        id SERIAL PRIMARY KEY,
+        user_id INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+        name VARCHAR(255) NOT NULL,
+        bank_name VARCHAR(255),
+        account_type VARCHAR(50) NOT NULL CHECK (account_type IN ('conta_corrente', 'poupanca', 'investimento', 'carteira', 'outro')),
+        balance DECIMAL(12, 2) DEFAULT 0,
+        bank_logo_url TEXT,
+        created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+        updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+      )
+    `);
+
+    await dbPool.query(`
+      CREATE TABLE IF NOT EXISTS streamings (
+        id SERIAL PRIMARY KEY,
+        user_id INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+        name VARCHAR(255) NOT NULL,
+        monthly_price DECIMAL(10, 2) NOT NULL,
+        color VARCHAR(50) NOT NULL,
+        created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+        updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+      )
+    `);
+
+    await dbPool.query(`
+      CREATE TABLE IF NOT EXISTS bills (
+        id SERIAL PRIMARY KEY,
+        user_id INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+        description VARCHAR(255) NOT NULL,
+        amount DECIMAL(12, 2) NOT NULL,
+        due_date DATE NOT NULL,
+        status VARCHAR(20) NOT NULL DEFAULT 'pending' CHECK (status IN ('pending', 'paid', 'overdue')),
+        category VARCHAR(100),
+        supplier_name VARCHAR(255),
+        supplier_document VARCHAR(50),
+        supplier_contact VARCHAR(255),
+        supplier_phone VARCHAR(50),
+        payment_method VARCHAR(50) DEFAULT 'pix',
+        pix_key VARCHAR(255),
+        wallet_id INTEGER REFERENCES wallets(id) ON DELETE SET NULL,
+        is_recurring BOOLEAN DEFAULT FALSE,
+        notes TEXT,
+        paid_date TIMESTAMP,
+        created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+        updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+      )
+    `);
+
+    await dbPool.query(`
+      CREATE TABLE IF NOT EXISTS receivables (
+        id SERIAL PRIMARY KEY,
+        user_id INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+        description VARCHAR(255) NOT NULL,
+        amount DECIMAL(12, 2) NOT NULL,
+        due_date DATE NOT NULL,
+        status VARCHAR(20) NOT NULL DEFAULT 'pending' CHECK (status IN ('pending', 'received', 'overdue')),
+        category VARCHAR(100),
+        customer_name VARCHAR(255),
+        customer_document VARCHAR(50),
+        wallet_id INTEGER REFERENCES wallets(id) ON DELETE SET NULL,
+        is_recurring BOOLEAN DEFAULT FALSE,
+        notes TEXT,
+        received_date TIMESTAMP,
+        created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+        updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+      )
+    `);
+
     console.log('✅ Tabelas criadas/verificadas com sucesso');
   } catch (error) {
     console.error('❌ Erro ao criar tabelas:', error);
@@ -356,6 +403,5 @@ export async function initDatabase() {
   }
 }
 
-// Exportar função para obter o pool
 export default getPool;
 
