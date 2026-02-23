@@ -30,6 +30,8 @@ const corsOptions = {
       'https://monetizespeed-client.vercel.app',
       'https://www.monetizespeed.com',
       'https://monetizespeed.com',
+      'https://www.tudonoazul.com.br',
+      'https://tudonoazul.com.br',
     ];
 
     if (origin.includes('.vercel.app')) {
@@ -60,7 +62,9 @@ app.options('*', (req, res) => {
     origin.includes('localhost') ||
     origin.includes('127.0.0.1') ||
     origin === 'https://www.monetizespeed.com' ||
-    origin === 'https://monetizespeed.com';
+    origin === 'https://monetizespeed.com' ||
+    origin === 'https://www.tudonoazul.com.br' ||
+    origin === 'https://tudonoazul.com.br';
 
   if (isAllowed) {
     res.setHeader('Access-Control-Allow-Origin', origin || '*');
