@@ -220,7 +220,21 @@ router.patch('/:id/receive', async (req, res) => {
             return res.status(404).json({ error: 'Conta não encontrada' });
         }
 
-        res.json(result.rows[0]);
+        const receivable = result.rows[0];
+
+        // Registrar transação de receita automaticamente
+        await pool.query(
+            `INSERT INTO transactions (user_id, type, category, amount, date, description, status)
+             VALUES ($1, 'income', $2, $3, CURRENT_DATE, $4, 'received')`,
+            [
+                req.user.userId,
+                receivable.category || 'Receitas',
+                receivable.amount,
+                receivable.description
+            ]
+        );
+
+        res.json(receivable);
     } catch (error) {
         console.error('Erro ao marcar como recebida:', error);
         res.status(500).json({ error: 'Erro ao marcar como recebida' });

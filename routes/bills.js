@@ -226,7 +226,21 @@ router.patch('/:id/pay', async (req, res) => {
             return res.status(404).json({ error: 'Conta não encontrada' });
         }
 
-        res.json(result.rows[0]);
+        const bill = result.rows[0];
+
+        // Registrar transação de despesa automaticamente
+        await pool.query(
+            `INSERT INTO transactions (user_id, type, category, amount, date, description, status)
+             VALUES ($1, 'expense', $2, $3, CURRENT_DATE, $4, 'paid')`,
+            [
+                req.user.userId,
+                bill.category || 'Contas',
+                bill.amount,
+                bill.description
+            ]
+        );
+
+        res.json(bill);
     } catch (error) {
         console.error('Erro ao marcar como paga:', error);
         res.status(500).json({ error: 'Erro ao marcar como paga' });
