@@ -14,6 +14,7 @@ import streamingsRoutes from './routes/streamings.js';
 import billsRoutes from './routes/bills.js';
 import receivablesRoutes from './routes/receivables.js';
 import audioRoutes from './routes/audio.js';
+import imageRoutes from './routes/image.js';
 
 const app = express();
 const PORT = process.env.PORT || 3000;
@@ -112,6 +113,7 @@ app.use('/api/streamings', streamingsRoutes);
 app.use('/api/bills', billsRoutes);
 app.use('/api/receivables', receivablesRoutes);
 app.use('/api/audio', audioRoutes);
+app.use('/api/image', imageRoutes);
 
 app.get('/api/health', (req, res) => {
   res.json({ status: 'ok', message: 'MonetizeSpeed API está funcionando' });
