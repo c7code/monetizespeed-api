@@ -41,26 +41,47 @@ function twimlResponse(message) {
 // Buscar usuário pelo número do WhatsApp
 async function findUserByPhone(phoneNumber) {
     const pool = getPool();
-    // Remove "whatsapp:" prefix e caracteres não numéricos
-    const cleanNumber = phoneNumber.replace('whatsapp:', '').replace(/[^\d+]/g, '');
-    const digitsOnly = cleanNumber.replace(/\D/g, '');
+    // Remove "whatsapp:" prefix e tudo que não é dígito
+    const digitsOnly = phoneNumber.replace(/\D/g, '');
 
-    // Tenta com o número completo, sem código do país, e variações
+    console.log('🔍 Buscando usuário pelo número:', phoneNumber, '→ dígitos:', digitsOnly);
+
+    // Extrair variações do número para busca
+    const withoutCountry = digitsOnly.replace(/^55/, ''); // Remove código do Brasil
     const variations = [
-        digitsOnly,
-        digitsOnly.replace(/^55/, ''),   // Remove código do Brasil
-        `+${digitsOnly}`,
-        cleanNumber,
+        digitsOnly,                   // 5581983662726
+        withoutCountry,               // 81983662726
+        `+${digitsOnly}`,             // +5581983662726
+        `+55${withoutCountry}`,       // +5581983662726
     ];
 
+    // Primeiro tenta match exato com várias variações
     for (const variation of variations) {
         const result = await pool.query(
             'SELECT id, name, email FROM users WHERE whatsapp_number = $1',
             [variation]
         );
-        if (result.rows.length > 0) return result.rows[0];
+        if (result.rows.length > 0) {
+            console.log('✅ Usuário encontrado com match exato:', variation);
+            return result.rows[0];
+        }
     }
 
+    // Fallback: busca por LIKE nos últimos 8-9 dígitos (mais confiável)
+    const lastDigits = withoutCountry.slice(-9); // Últimos 9 dígitos (sem DDD do país)
+    if (lastDigits.length >= 8) {
+        console.log('🔍 Tentando busca por sufixo:', lastDigits);
+        const result = await pool.query(
+            "SELECT id, name, email FROM users WHERE REPLACE(REPLACE(whatsapp_number, '+', ''), ' ', '') LIKE $1",
+            [`%${lastDigits}`]
+        );
+        if (result.rows.length > 0) {
+            console.log('✅ Usuário encontrado com match por sufixo:', result.rows[0].email);
+            return result.rows[0];
+        }
+    }
+
+    console.log('❌ Nenhum usuário encontrado para:', digitsOnly, 'variações testadas:', variations);
     return null;
 }
 
