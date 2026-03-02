@@ -41,22 +41,46 @@ function twimlResponse(message) {
 // Buscar usuário pelo número do WhatsApp
 async function findUserByPhone(phoneNumber) {
     const pool = getPool();
-    // Remove "whatsapp:" prefix e tudo que não é dígito
+    // Remove tudo que não é dígito
     const digitsOnly = phoneNumber.replace(/\D/g, '');
 
     console.log('🔍 Buscando usuário pelo número:', phoneNumber, '→ dígitos:', digitsOnly);
 
-    // Extrair variações do número para busca
+    // Extrair DDD e número local
     const withoutCountry = digitsOnly.replace(/^55/, ''); // Remove código do Brasil
+    const ddd = withoutCountry.slice(0, 2);
+    const localNumber = withoutCountry.slice(2);
+
+    // Gerar variação com/sem o 9 na frente (migração BR 8→9 dígitos)
+    let localWith9 = localNumber;
+    let localWithout9 = localNumber;
+    if (localNumber.length === 8) {
+        localWith9 = '9' + localNumber;     // Adiciona o 9
+    } else if (localNumber.length === 9 && localNumber.startsWith('9')) {
+        localWithout9 = localNumber.slice(1); // Remove o 9
+    }
+
+    // Gerar todas as variações possíveis
     const variations = [
-        digitsOnly,                   // 5581983662726
-        withoutCountry,               // 81983662726
-        `+${digitsOnly}`,             // +5581983662726
-        `+55${withoutCountry}`,       // +5581983662726
+        digitsOnly,                             // 558183662726
+        withoutCountry,                         // 8183662726
+        `+${digitsOnly}`,                       // +558183662726
+        `+55${withoutCountry}`,                 // +558183662726
+        `55${ddd}${localWith9}`,                // 5581983662726
+        `${ddd}${localWith9}`,                  // 81983662726
+        `+55${ddd}${localWith9}`,               // +5581983662726
+        `55${ddd}${localWithout9}`,             // 558183662726
+        `${ddd}${localWithout9}`,               // 8183662726
+        `+55${ddd}${localWithout9}`,            // +558183662726
     ];
 
-    // Primeiro tenta match exato com várias variações
-    for (const variation of variations) {
+    // Remover duplicatas
+    const uniqueVariations = [...new Set(variations)];
+
+    console.log('🔍 Variações a testar:', uniqueVariations);
+
+    // Tenta match exato com cada variação
+    for (const variation of uniqueVariations) {
         const result = await pool.query(
             'SELECT id, name, email FROM users WHERE whatsapp_number = $1',
             [variation]
@@ -67,13 +91,13 @@ async function findUserByPhone(phoneNumber) {
         }
     }
 
-    // Fallback: busca por LIKE nos últimos 8-9 dígitos (mais confiável)
-    const lastDigits = withoutCountry.slice(-9); // Últimos 9 dígitos (sem DDD do país)
-    if (lastDigits.length >= 8) {
-        console.log('🔍 Tentando busca por sufixo:', lastDigits);
+    // Fallback: busca por LIKE nos últimos 8 dígitos (ignora formatação e 9°dígito)
+    const last8 = localWithout9.slice(-8);
+    if (last8.length === 8) {
+        console.log('🔍 Tentando busca por últimos 8 dígitos:', last8);
         const result = await pool.query(
             "SELECT id, name, email FROM users WHERE REPLACE(REPLACE(whatsapp_number, '+', ''), ' ', '') LIKE $1",
-            [`%${lastDigits}`]
+            [`%${last8}`]
         );
         if (result.rows.length > 0) {
             console.log('✅ Usuário encontrado com match por sufixo:', result.rows[0].email);
@@ -81,7 +105,7 @@ async function findUserByPhone(phoneNumber) {
         }
     }
 
-    console.log('❌ Nenhum usuário encontrado para:', digitsOnly, 'variações testadas:', variations);
+    console.log('❌ Nenhum usuário encontrado para:', digitsOnly);
     return null;
 }
 
