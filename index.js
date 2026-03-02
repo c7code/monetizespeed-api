@@ -15,6 +15,7 @@ import billsRoutes from './routes/bills.js';
 import receivablesRoutes from './routes/receivables.js';
 import audioRoutes from './routes/audio.js';
 import imageRoutes from './routes/image.js';
+import whatsappWebhookRoutes from './routes/whatsappWebhook.js';
 
 const app = express();
 const PORT = process.env.PORT || 3000;
@@ -80,6 +81,7 @@ app.options('*', (req, res) => {
 
 app.use(cors(corsOptions));
 app.use(express.json());
+app.use(express.urlencoded({ extended: false }));
 
 app.get('/', (req, res) => {
   res.json({
@@ -114,6 +116,7 @@ app.use('/api/bills', billsRoutes);
 app.use('/api/receivables', receivablesRoutes);
 app.use('/api/audio', audioRoutes);
 app.use('/api/image', imageRoutes);
+app.use('/webhooks/twilio', whatsappWebhookRoutes);
 
 app.get('/api/health', (req, res) => {
   res.json({ status: 'ok', message: 'MonetizeSpeed API está funcionando' });
