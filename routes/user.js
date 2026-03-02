@@ -1,6 +1,7 @@
 import express from 'express';
 import getPool from '../db.js';
 import { authenticateToken } from './auth.js';
+import { sendWelcomeMessage } from '../services/whatsappService.js';
 
 const router = express.Router();
 
@@ -11,27 +12,32 @@ router.use(authenticateToken);
 router.put('/whatsapp', async (req, res) => {
   try {
     const { whatsapp_number } = req.body;
-    
+
     if (!whatsapp_number) {
       return res.status(400).json({ error: 'Número do WhatsApp é obrigatório' });
     }
-    
+
     // Validar formato básico (apenas números, pode ter + no início)
     const cleanNumber = whatsapp_number.replace(/[^\d+]/g, '');
     if (cleanNumber.length < 10) {
       return res.status(400).json({ error: 'Número inválido' });
     }
-    
+
     const pool = getPool();
     const result = await pool.query(
-      'UPDATE users SET whatsapp_number = $1, updated_at = CURRENT_TIMESTAMP WHERE id = $2 RETURNING id, email, whatsapp_number',
+      'UPDATE users SET whatsapp_number = $1, updated_at = CURRENT_TIMESTAMP WHERE id = $2 RETURNING id, name, email, whatsapp_number',
       [cleanNumber, req.user.userId]
     );
-    
+
     if (result.rows.length === 0) {
       return res.status(404).json({ error: 'Usuário não encontrado' });
     }
-    
+
+    // Enviar mensagem de boas-vindas (fire-and-forget)
+    sendWelcomeMessage(cleanNumber, result.rows[0].name)
+      .then(() => console.log('✅ Mensagem de boas-vindas enviada para', cleanNumber))
+      .catch(err => console.error('⚠️ Falha ao enviar boas-vindas:', err.message));
+
     res.json({
       message: 'Número do WhatsApp atualizado com sucesso',
       user: result.rows[0]
@@ -50,11 +56,11 @@ router.get('/me', async (req, res) => {
       'SELECT id, email, name, whatsapp_number, created_at FROM users WHERE id = $1',
       [req.user.userId]
     );
-    
+
     if (result.rows.length === 0) {
       return res.status(404).json({ error: 'Usuário não encontrado' });
     }
-    
+
     res.json(result.rows[0]);
   } catch (error) {
     console.error('Erro ao buscar usuário:', error);
