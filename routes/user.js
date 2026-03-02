@@ -33,10 +33,13 @@ router.put('/whatsapp', async (req, res) => {
       return res.status(404).json({ error: 'Usuário não encontrado' });
     }
 
-    // Enviar mensagem de boas-vindas (fire-and-forget)
-    sendWelcomeMessage(cleanNumber, result.rows[0].name)
-      .then(() => console.log('✅ Mensagem de boas-vindas enviada para', cleanNumber))
-      .catch(err => console.error('⚠️ Falha ao enviar boas-vindas:', err.message));
+    // Enviar mensagem de boas-vindas (await para funcionar no Vercel serverless)
+    try {
+      await sendWelcomeMessage(cleanNumber, result.rows[0].name);
+      console.log('✅ Mensagem de boas-vindas enviada para', cleanNumber);
+    } catch (welcomeErr) {
+      console.error('⚠️ Falha ao enviar boas-vindas:', welcomeErr.message);
+    }
 
     res.json({
       message: 'Número do WhatsApp atualizado com sucesso',
