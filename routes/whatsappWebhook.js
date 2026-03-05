@@ -2,10 +2,8 @@ import express from 'express';
 import OpenAI from 'openai';
 import getPool from '../db.js';
 import fs from 'fs';
-import fsp from 'fs/promises';
 import path from 'path';
 import { fileURLToPath } from 'url';
-import { sendWhatsAppMessage } from '../services/whatsappService.js';
 
 const router = express.Router();
 
@@ -81,14 +79,16 @@ async function findUserByPhone(phoneNumber) {
 
     console.log('🔍 Variações a testar:', uniqueVariations);
 
-    // Tenta match exato com todas as variações em uma única query
-    const result = await pool.query(
-        'SELECT id, name, email FROM users WHERE whatsapp_number = ANY($1)',
-        [uniqueVariations]
-    );
-    if (result.rows.length > 0) {
-        console.log('✅ Usuário encontrado com match exato:', result.rows[0].email);
-        return result.rows[0];
+    // Tenta match exato com cada variação
+    for (const variation of uniqueVariations) {
+        const result = await pool.query(
+            'SELECT id, name, email FROM users WHERE whatsapp_number = $1',
+            [variation]
+        );
+        if (result.rows.length > 0) {
+            console.log('✅ Usuário encontrado com match exato:', variation);
+            return result.rows[0];
+        }
     }
 
     // Fallback: busca por LIKE nos últimos 8 dígitos (ignora formatação e 9°dígito)
@@ -151,7 +151,7 @@ async function handleTextMessage(messageBody) {
     if (!ai) throw new Error('OpenAI não configurada');
 
     const completion = await ai.chat.completions.create({
-        model: 'gpt-4o-mini',
+        model: 'gpt-4o',
         messages: [
             { role: 'system', content: SYSTEM_PROMPT },
             { role: 'user', content: `Data atual: ${new Date().toISOString().split('T')[0]}. Texto: "${messageBody}"` }
@@ -188,7 +188,7 @@ async function handleAudioMessage(mediaUrl) {
     // Baixar o áudio do Twilio
     const audioBuffer = await downloadTwilioMedia(mediaUrl);
     const tmpPath = path.join('/tmp', `whatsapp_audio_${Date.now()}.ogg`);
-    await fsp.writeFile(tmpPath, audioBuffer);
+    fs.writeFileSync(tmpPath, audioBuffer);
 
     try {
         // 1. Transcrever com Whisper
@@ -201,9 +201,9 @@ async function handleAudioMessage(mediaUrl) {
         const text = transcription.text;
         console.log('📝 Transcrição WhatsApp:', text);
 
-        // 2. Extrair dados com GPT-4o-mini (mais rápido para parsing de texto)
+        // 2. Extrair dados com GPT-4o
         const completion = await ai.chat.completions.create({
-            model: 'gpt-4o-mini',
+            model: 'gpt-4o',
             messages: [
                 { role: 'system', content: SYSTEM_PROMPT },
                 { role: 'user', content: `Data atual: ${new Date().toISOString().split('T')[0]}. Texto transcrito de áudio: "${text}"` }
@@ -215,7 +215,7 @@ async function handleAudioMessage(mediaUrl) {
         data._transcription = text;
         return data;
     } finally {
-        await fsp.unlink(tmpPath).catch(() => { });
+        if (fs.existsSync(tmpPath)) fs.unlinkSync(tmpPath);
     }
 }
 
@@ -253,7 +253,7 @@ Retorne APENAS o JSON, sem markdown ou explicações adicionais.`
                 role: 'user',
                 content: [
                     { type: 'text', text: `Data atual: ${new Date().toISOString().split('T')[0]}. Analise esta imagem e extraia os dados da transação.` },
-                    { type: 'image_url', image_url: { url: `data:${mimeType};base64,${base64Image}`, detail: 'low' } }
+                    { type: 'image_url', image_url: { url: `data:${mimeType};base64,${base64Image}`, detail: 'high' } }
                 ]
             }
         ],
@@ -262,73 +262,6 @@ Retorne APENAS o JSON, sem markdown ou explicações adicionais.`
     });
 
     return JSON.parse(completion.choices[0].message.content);
-}
-
-// ==================== PROCESSAMENTO EM BACKGROUND ====================
-
-async function processMessageInBackground(fromNumber, user, { Body, NumMedia, MediaUrl0, MediaContentType0 }) {
-    try {
-        const numMedia = parseInt(NumMedia || '0', 10);
-        let transactionData;
-        let extraInfo = '';
-
-        // Determinar tipo de mensagem
-        if (numMedia > 0 && MediaUrl0) {
-            const contentType = (MediaContentType0 || '').toLowerCase();
-
-            if (contentType.startsWith('audio/') || contentType.includes('ogg') || contentType.includes('opus')) {
-                console.log('🎤 Processando áudio do WhatsApp...');
-                transactionData = await handleAudioMessage(MediaUrl0);
-                if (transactionData._transcription) {
-                    extraInfo = `🎙️ Transcrição: "${transactionData._transcription}"\n\n`;
-                    delete transactionData._transcription;
-                }
-            } else if (contentType.startsWith('image/')) {
-                console.log('📷 Processando imagem do WhatsApp...');
-                transactionData = await handleImageMessage(MediaUrl0, contentType);
-            } else {
-                await sendWhatsAppMessage(fromNumber, '⚠️ Formato de arquivo não suportado.\n\nEnvie texto, áudio ou foto de recibo/nota fiscal.');
-                return;
-            }
-        } else if (Body && Body.trim()) {
-            console.log('💬 Processando texto do WhatsApp...');
-            transactionData = await handleTextMessage(Body.trim());
-        } else {
-            await sendWhatsAppMessage(fromNumber, '🤔 Não recebi nenhuma mensagem.\n\nEnvie um texto como "Gastei 50 reais no almoço", um áudio ou uma foto de recibo.');
-            return;
-        }
-
-        // Verificar se houve erro na extração
-        if (transactionData.error) {
-            await sendWhatsAppMessage(fromNumber, `⚠️ ${transactionData.error}`);
-            return;
-        }
-
-        // Validar dados
-        if (!transactionData.amount || transactionData.amount <= 0) {
-            await sendWhatsAppMessage(fromNumber,
-                '⚠️ Não consegui identificar o valor da transação.\n\n' +
-                'Tente novamente com mais detalhes, ex:\n' +
-                '"Gastei 50 reais no almoço"\n' +
-                '"Recebi 2000 de salário"'
-            );
-            return;
-        }
-
-        // Criar transação
-        const transaction = await createTransaction(user.id, transactionData);
-        console.log('✅ Transação criada via WhatsApp:', transaction.id);
-
-        // Enviar confirmação
-        const confirmation = extraInfo + formatConfirmation(transactionData, transaction);
-        await sendWhatsAppMessage(fromNumber, confirmation);
-
-    } catch (error) {
-        console.error('❌ Erro no processamento em background WhatsApp:', error);
-        await sendWhatsAppMessage(fromNumber,
-            '❌ Ocorreu um erro ao processar sua mensagem. Tente novamente em alguns instantes.'
-        ).catch(err => console.error('❌ Falha ao enviar mensagem de erro:', err.message));
-    }
 }
 
 // ==================== WEBHOOK PRINCIPAL ====================
@@ -344,7 +277,7 @@ router.post('/whatsapp/inbound', async (req, res) => {
             return res.send(twimlResponse('❌ Número não identificado.'));
         }
 
-        // Buscar usuário (rápido com query única)
+        // Buscar usuário
         const user = await findUserByPhone(From);
         if (!user) {
             res.type('text/xml');
@@ -356,24 +289,76 @@ router.post('/whatsapp/inbound', async (req, res) => {
 
         console.log(`👤 Usuário encontrado: ${user.name || user.email} (ID: ${user.id})`);
 
-        // Extrair número limpo do formato whatsapp:+XXXXX
-        const cleanFrom = From.replace('whatsapp:', '').replace('+', '');
+        const numMedia = parseInt(NumMedia || '0', 10);
+        let transactionData;
+        let extraInfo = '';
 
-        // Responder 200 OK imediatamente ao Twilio (sem TwiML = sem mensagem automática)
-        res.status(200).type('text/xml').send('<Response></Response>');
+        // Determinar tipo de mensagem
+        if (numMedia > 0 && MediaUrl0) {
+            const contentType = (MediaContentType0 || '').toLowerCase();
 
-        // Processar em background (fire-and-forget)
-        processMessageInBackground(cleanFrom, user, { Body, NumMedia, MediaUrl0, MediaContentType0 });
+            if (contentType.startsWith('audio/') || contentType.includes('ogg') || contentType.includes('opus')) {
+                // ÁUDIO
+                console.log('🎤 Processando áudio do WhatsApp...');
+                transactionData = await handleAudioMessage(MediaUrl0);
+                if (transactionData._transcription) {
+                    extraInfo = `🎙️ Transcrição: "${transactionData._transcription}"\n\n`;
+                    delete transactionData._transcription;
+                }
+            } else if (contentType.startsWith('image/')) {
+                // IMAGEM
+                console.log('📷 Processando imagem do WhatsApp...');
+                transactionData = await handleImageMessage(MediaUrl0, contentType);
+            } else {
+                res.type('text/xml');
+                return res.send(twimlResponse(
+                    '⚠️ Formato de arquivo não suportado.\n\nEnvie texto, áudio ou foto de recibo/nota fiscal.'
+                ));
+            }
+        } else if (Body && Body.trim()) {
+            // TEXTO
+            console.log('💬 Processando texto do WhatsApp...');
+            transactionData = await handleTextMessage(Body.trim());
+        } else {
+            res.type('text/xml');
+            return res.send(twimlResponse(
+                '🤔 Não recebi nenhuma mensagem.\n\n' +
+                'Envie um texto como "Gastei 50 reais no almoço", um áudio ou uma foto de recibo.'
+            ));
+        }
+
+        // Verificar se houve erro na extração
+        if (transactionData.error) {
+            res.type('text/xml');
+            return res.send(twimlResponse(`⚠️ ${transactionData.error}`));
+        }
+
+        // Validar dados
+        if (!transactionData.amount || transactionData.amount <= 0) {
+            res.type('text/xml');
+            return res.send(twimlResponse(
+                '⚠️ Não consegui identificar o valor da transação.\n\n' +
+                'Tente novamente com mais detalhes, ex:\n' +
+                '"Gastei 50 reais no almoço"\n' +
+                '"Recebi 2000 de salário"'
+            ));
+        }
+
+        // Criar transação
+        const transaction = await createTransaction(user.id, transactionData);
+        console.log('✅ Transação criada via WhatsApp:', transaction.id);
+
+        // Responder com confirmação
+        const confirmation = extraInfo + formatConfirmation(transactionData, transaction);
+        res.type('text/xml');
+        return res.send(twimlResponse(confirmation));
 
     } catch (error) {
         console.error('❌ Erro no webhook WhatsApp:', error);
-        // Se ainda não respondeu, enviar resposta de erro
-        if (!res.headersSent) {
-            res.type('text/xml');
-            return res.send(twimlResponse(
-                '❌ Ocorreu um erro ao processar sua mensagem. Tente novamente em alguns instantes.'
-            ));
-        }
+        res.type('text/xml');
+        return res.send(twimlResponse(
+            '❌ Ocorreu um erro ao processar sua mensagem. Tente novamente em alguns instantes.'
+        ));
     }
 });
 
