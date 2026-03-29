@@ -19,17 +19,29 @@ function getOpenAI() {
     return openai;
 }
 
-// Prompt do sistema para extração de transações
-const SYSTEM_PROMPT = `Você é um assistente financeiro. Analise o texto do usuário e extraia os dados da transação em formato JSON.
-Campos requeridos:
+// Prompt do sistema para extração de transações ou perguntas
+const SYSTEM_PROMPT = `Você é um assistente financeiro da plataforma Tudo no Azul. Analise o texto do usuário e identifique a intenção. Retorne no formato JSON.
+
+Intenções possíveis:
+1. 'register': O usuário está informando um novo gasto ou ganho.
+2. 'query': O usuário está perguntando sobre seus gastos, ganhos ou saldo (ex: "quanto gastei com X?", "qual meu saldo?").
+
+Se a intenção for 'register', extraia os campos:
+- intent: 'register'
 - type: 'income' ou 'expense'
-- category: Uma das seguintes: 'Alimentação', 'Moradia', 'Transporte', 'Saúde', 'Educação', 'Lazer', 'Mercado', 'Contas', 'Outros', 'Salário', 'Investimentos', 'Vendas', 'Freela'. Se não se encaixar perfeitamente, use 'Outros' ou a mais próxima.
-- amount: valor numérico (number).
+- category: Uma das seguintes: 'Alimentação', 'Moradia', 'Transporte', 'Saúde', 'Educação', 'Lazer', 'Mercado', 'Contas', 'Outros', 'Salário', 'Investimentos', 'Vendas', 'Freela'. Se não se encaixar perfeitamente, use 'Outros'.
+- amount: valor numérico (number). Se houver múltiplos itens, use o valor total.
 - date: data no formato YYYY-MM-DD. Se o usuário disser "hoje", use a data atual. Se não disser data, use a data atual.
 - description: breve descrição do gasto/ganho.
 
-Se NÃO for possível identificar uma transação financeira, retorne:
-{ "error": "Não consegui identificar uma transação. Tente algo como: Gastei 50 reais no almoço" }
+Se a intenção for 'query', extraia:
+- intent: 'query'
+- query_text: a pergunta original formatada ou resumida.
+- period: 'current_month', 'last_month', 'today', 'all' (tente inferir; default é 'current_month').
+- category_filter: se a pergunta focar numa categoria específica, coloque o nome dela aqui (ex: 'Alimentação'), senão null.
+
+Se nenhuma das duas for aplicável, retorne:
+{ "error": "Não entendi sua mensagem. Você quer registrar um gasto ou perguntar sobre suas transações?" }
 
 Retorne APENAS o JSON, sem markdown ou explicações adicionais.`;
 
@@ -143,6 +155,62 @@ function formatConfirmation(data, transaction) {
     );
 }
 
+// Consultar transações para uma pergunta
+async function getUserTransactionsForQuery(userId, period, categoryFilter) {
+    const pool = getPool();
+    let query = 'SELECT type, category, amount, date, description FROM transactions WHERE user_id = $1';
+    let params = [userId];
+    let paramIndex = 2;
+    
+    if (period === 'current_month') {
+        query += ` AND date >= date_trunc('month', current_date) AND date < date_trunc('month', current_date) + interval '1 month'`;
+    } else if (period === 'last_month') {
+        query += ` AND date >= date_trunc('month', current_date) - interval '1 month' AND date < date_trunc('month', current_date)`;
+    } else if (period === 'today') {
+        query += ` AND date = current_date`;
+    } // If 'all', no date filter
+    
+    if (categoryFilter) {
+        query += ` AND category ILIKE $${paramIndex}`;
+        params.push(`%${categoryFilter}%`);
+        paramIndex++;
+    }
+    
+    query += ' ORDER BY date DESC LIMIT 200'; // Limit results slightly higher but bounded
+
+    const result = await pool.query(query, params);
+    return result.rows;
+}
+
+// Obter a resposta da IA para a pergunta baseada nas transações
+async function answerFinancialQueryWithAI(question, transactions) {
+    const ai = getOpenAI();
+    if (!ai) throw new Error('OpenAI não configurada');
+
+    const txText = transactions.length > 0 
+        ? JSON.stringify(transactions) 
+        : "Nenhuma transação encontrada para este período/filtro.";
+
+    const completion = await ai.chat.completions.create({
+        model: 'gpt-4o',
+        messages: [
+            { 
+                role: 'system', 
+                content: 'Você é um assistente financeiro amigável do app "Tudo no Azul". ' +
+                         'Responda à pergunta do usuário usando APENAS as transações fornecidas, ' +
+                         'fazendo as contas (somas) necessárias. Formate sua resposta de forma clara ' +
+                         'para ser lida no WhatsApp, utilizando emojis e negrito quando apropriado. ' +
+                         'Seja conciso mas informativo.' 
+            },
+            { 
+                role: 'user', 
+                content: `Pergunta do usuário: "${question}"\n\nTransações no banco de dados:\n${txText}` 
+            }
+        ]
+    });
+    return completion.choices[0].message.content;
+}
+
 // ==================== HANDLERS ====================
 
 // Processar mensagem de texto com GPT-4o
@@ -235,9 +303,10 @@ async function handleImageMessage(mediaUrl, contentType) {
                 role: 'system',
                 content: `Você é um assistente financeiro especialista em analisar imagens de recibos, notas fiscais, cupons, comprovantes, boletos e fotos de produtos/serviços.
 
-Analise a imagem enviada e extraia os dados da transação em formato JSON.
+Analise a imagem enviada e identifique se o usuário quer registrar uma transação ou se está apenas perguntando sobre algo (embora com foto seja quase sempre registro). Se for um comprovante ou recibo, assuma 'register'.
 
-Campos requeridos:
+Retorne no formato JSON com:
+- intent: 'register'
 - type: 'income' ou 'expense' (na maioria dos casos será 'expense' para recibos e compras)
 - category: Uma das seguintes: 'Alimentação', 'Moradia', 'Transporte', 'Saúde', 'Educação', 'Lazer', 'Mercado', 'Contas', 'Outros', 'Salário', 'Investimentos', 'Vendas', 'Freela'. Se não se encaixar perfeitamente, use 'Outros' ou a mais próxima.
 - amount: valor numérico total (number). Se houver múltiplos itens, use o valor TOTAL.
@@ -333,6 +402,20 @@ router.post('/whatsapp/inbound', async (req, res) => {
             return res.send(twimlResponse(`⚠️ ${transactionData.error}`));
         }
 
+        // Se for uma pergunta em vez de registro
+        if (transactionData.intent === 'query') {
+            console.log('🔍 Executando modo Pergunta (Query)...');
+            const txs = await getUserTransactionsForQuery(
+                user.id, 
+                transactionData.period, 
+                transactionData.category_filter
+            );
+            const answer = await answerFinancialQueryWithAI(transactionData.query_text, txs);
+            res.type('text/xml');
+            return res.send(twimlResponse(answer));
+        }
+
+        // Se cheguei aqui (e não tem error/query), assumiremos 'register' by default
         // Validar dados
         if (!transactionData.amount || transactionData.amount <= 0) {
             res.type('text/xml');
