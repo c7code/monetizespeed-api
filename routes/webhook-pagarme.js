@@ -49,6 +49,14 @@ router.post('/', async (req, res) => {
     console.log(`📩 Webhook Pagar.me: ${event.type}`);
 
     const pool = getPool();
+    
+    // Testar conexão antes de processar (evita timeout em conexões mortas)
+    try {
+      await pool.query('SELECT 1');
+    } catch (connErr) {
+      console.warn('⚠️ Conexão com banco falhou, tentando novamente...', connErr.message);
+      await pool.query('SELECT 1'); // segunda tentativa após pool reconectar
+    }
 
     switch (event.type) {
       // ====== SUBSCRIPTION EVENTS ======

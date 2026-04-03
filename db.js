@@ -160,14 +160,17 @@ function getPool() {
       console.log('⚠️ Não foi possível extrair informações da URL:', e.message);
     }
 
+    const isServerless = process.env.VERCEL === '1';
+
     const poolConfig = {
       connectionString: databaseUrl,
       ssl: {
         rejectUnauthorized: false
       },
-      max: 20,
-      idleTimeoutMillis: 30000,
-      connectionTimeoutMillis: 20000,
+      max: isServerless ? 3 : 20,
+      idleTimeoutMillis: isServerless ? 10000 : 30000,
+      connectionTimeoutMillis: 10000,
+      allowExitOnIdle: isServerless,
     };
 
     try {
