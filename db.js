@@ -421,12 +421,18 @@ export async function initDatabase() {
       END $$;
     `);
 
+    // Atualizar CHECK constraint para incluir status 'failed' (migração)
+    try {
+      await dbPool.query(`ALTER TABLE IF EXISTS subscriptions DROP CONSTRAINT IF EXISTS subscriptions_status_check`);
+      await dbPool.query(`ALTER TABLE IF EXISTS subscriptions ADD CONSTRAINT subscriptions_status_check CHECK (status IN ('pending', 'active', 'canceled', 'past_due', 'ended', 'failed'))`);
+    } catch (e) { /* tabela ainda não existe, será criada abaixo */ }
+
     await dbPool.query(`
       CREATE TABLE IF NOT EXISTS subscriptions (
         id SERIAL PRIMARY KEY,
         user_id INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
         pagarme_subscription_id VARCHAR(255) UNIQUE,
-        status VARCHAR(30) DEFAULT 'pending' CHECK (status IN ('pending', 'active', 'canceled', 'past_due', 'ended')),
+        status VARCHAR(30) DEFAULT 'pending' CHECK (status IN ('pending', 'active', 'canceled', 'past_due', 'ended', 'failed')),
         current_period_end TIMESTAMP,
         plan_amount INTEGER DEFAULT 2990,
         created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
