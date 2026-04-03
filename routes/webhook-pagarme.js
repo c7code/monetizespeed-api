@@ -9,27 +9,28 @@ function generateAccessCode() {
   return crypto.randomBytes(5).toString('hex').toUpperCase().substring(0, 8);
 }
 
-// Verificar assinatura do webhook do Pagar.me (HMAC SHA256)
-function verifyWebhookSignature(req) {
-  const signature = req.headers['x-hub-signature'];
-  
-  if (!process.env.PAGARME_WEBHOOK_SECRET) {
-    console.warn('⚠️ PAGARME_WEBHOOK_SECRET não configurado — aceitando webhook sem verificação');
+// Verificar autenticação do webhook do Pagar.me (HTTP Basic Auth)
+function verifyWebhookAuth(req) {
+  const webhookUser = process.env.PAGARME_WEBHOOK_USER;
+  const webhookPass = process.env.PAGARME_WEBHOOK_PASSWORD;
+
+  // Se não há credenciais configuradas, aceitar (dev/testing)
+  if (!webhookUser || !webhookPass) {
+    console.warn('⚠️ PAGARME_WEBHOOK_USER/PASSWORD não configurados — aceitando webhook sem verificação');
     return true;
   }
 
-  if (!signature) {
-    console.warn('⚠️ Webhook recebido sem header x-hub-signature — aceitando sem verificação');
-    return true;
+  const authHeader = req.headers['authorization'];
+  if (!authHeader || !authHeader.startsWith('Basic ')) {
+    console.error('❌ Webhook sem header Authorization Basic');
+    return false;
   }
 
-  const body = JSON.stringify(req.body);
-  const expectedSignature = crypto
-    .createHmac('sha256', process.env.PAGARME_WEBHOOK_SECRET)
-    .update(body)
-    .digest('hex');
+  const base64Credentials = authHeader.split(' ')[1];
+  const credentials = Buffer.from(base64Credentials, 'base64').toString('utf-8');
+  const [user, pass] = credentials.split(':');
 
-  return signature === expectedSignature;
+  return user === webhookUser && pass === webhookPass;
 }
 
 // POST /webhooks/pagarme — Receber eventos do Pagar.me
@@ -39,7 +40,7 @@ router.post('/', async (req, res) => {
     res.status(200).json({ received: true });
 
     // Verificar assinatura
-    if (!verifyWebhookSignature(req)) {
+    if (!verifyWebhookAuth(req)) {
       console.error('❌ Webhook com assinatura inválida');
       return;
     }
