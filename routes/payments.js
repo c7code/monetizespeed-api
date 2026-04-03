@@ -95,7 +95,7 @@ router.get('/status', authenticateToken, async (req, res) => {
 
 router.post('/subscribe', authenticateToken, async (req, res) => {
   try {
-    const { card, document, name, billing_address } = req.body;
+    const { card, document, name, phone, billing_address } = req.body;
 
     if (!card || !card.number) {
       return res.status(400).json({ error: 'Dados do cartão são obrigatórios' });
@@ -132,7 +132,7 @@ router.post('/subscribe', authenticateToken, async (req, res) => {
       [req.user.userId]
     );
 
-    // Criar customer no Pagar.me (com CPF + telefone)
+    // Criar customer no Pagar.me (com CPF + telefone real)
     const userResult = await pool.query(
       'SELECT email, name FROM users WHERE id = $1',
       [req.user.userId]
@@ -143,6 +143,7 @@ router.post('/subscribe', authenticateToken, async (req, res) => {
       name: name || user.name || user.email.split('@')[0],
       email: user.email,
       document: cleanDocument,
+      phone: phone || null,
     });
 
     const customerId = customer.id;
@@ -277,7 +278,7 @@ router.post('/cancel-subscription', authenticateToken, async (req, res) => {
 
 router.post('/buy-access-codes', authenticateToken, async (req, res) => {
   try {
-    const { card, document, name, quantity, billing_address } = req.body;
+    const { card, document, name, quantity, phone, billing_address } = req.body;
 
     if (!card || !card.number) {
       return res.status(400).json({ error: 'Dados do cartão são obrigatórios' });
@@ -323,6 +324,7 @@ router.post('/buy-access-codes', authenticateToken, async (req, res) => {
       name: name || user.name || user.email.split('@')[0],
       email: user.email,
       document: cleanDocument,
+      phone: phone || null,
     });
     const customerId = customer.id;
     await pool.query('UPDATE users SET pagarme_customer_id = $1 WHERE id = $2', [customerId, req.user.userId]);
