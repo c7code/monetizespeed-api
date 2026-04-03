@@ -50,24 +50,79 @@ async function pagarmeRequest(method, path, body = null) {
   return data;
 }
 
+// ====== TOKENIZAÇÃO DO CARTÃO (server-side) ======
+
+export async function tokenizeCard({ number, holder_name, exp_month, exp_year, cvv }) {
+  const publicKey = process.env.PAGARME_PUBLIC_KEY;
+  if (!publicKey) {
+    throw new Error('PAGARME_PUBLIC_KEY não está configurada');
+  }
+
+  const url = `${PAGARME_API_URL}/tokens?appId=${publicKey}`;
+
+  const response = await fetch(url, {
+    method: 'POST',
+    headers: {
+      'Content-Type': 'application/json',
+      'Accept': 'application/json',
+    },
+    body: JSON.stringify({
+      type: 'card',
+      card: {
+        number: String(number).replace(/\s/g, ''),
+        holder_name,
+        exp_month: parseInt(exp_month),
+        exp_year: parseInt(exp_year),
+        cvv: String(cvv),
+      },
+    }),
+  });
+
+  const text = await response.text();
+  let data;
+  try {
+    data = JSON.parse(text);
+  } catch {
+    console.error('❌ Tokenização resposta não-JSON:', text);
+    throw new Error('Erro ao tokenizar cartão');
+  }
+
+  if (!response.ok) {
+    console.error('❌ Tokenização erro:', JSON.stringify(data, null, 2));
+    throw new Error(data.message || 'Erro ao tokenizar cartão. Verifique os dados.');
+  }
+
+  console.log('✅ Cartão tokenizado:', data.id);
+  return data.id;
+}
+
 // ====== CUSTOMERS ======
 
 export async function createCustomer({ name, email, document, phone }) {
   const cleanDoc = document ? document.replace(/\D/g, '') : '';
   console.log(`📋 Criando customer: name=${name}, email=${email}, document=${cleanDoc}, docLength=${cleanDoc.length}`);
   
+  // Telefone padrão se não fornecido (obrigatório pelo Pagar.me)
+  const phoneData = phone ? {
+    mobile_phone: {
+      country_code: '55',
+      area_code: phone.substring(0, 2),
+      number: phone.substring(2),
+    }
+  } : {
+    mobile_phone: {
+      country_code: '55',
+      area_code: '11',
+      number: '999999999',
+    }
+  };
+
   const payload = {
     name,
     email,
     type: 'individual',
     document: cleanDoc,
-    phones: phone ? {
-      mobile_phone: {
-        country_code: '55',
-        area_code: phone.substring(0, 2),
-        number: phone.substring(2),
-      }
-    } : undefined,
+    phones: phoneData,
   };
 
   return pagarmeRequest('POST', '/customers', payload);
@@ -77,29 +132,9 @@ export async function getCustomer(customerId) {
   return pagarmeRequest('GET', `/customers/${customerId}`);
 }
 
-// ====== CARDS (dados brutos com billing_address para passar na verificação) ======
-
-export async function createCardOnCustomer(customerId, cardData, holderDocument, billingAddress) {
-  console.log(`📋 Registrando cartão no customer ${customerId} (dados brutos + billing_address)`);
-  
-  const payload = {
-    number: String(cardData.number).replace(/\s/g, ''),
-    holder_name: cardData.holder_name,
-    holder_document: holderDocument,
-    exp_month: parseInt(cardData.exp_month),
-    exp_year: parseInt(cardData.exp_year),
-    cvv: String(cardData.cvv),
-    billing_address: billingAddress,
-  };
-
-  const result = await pagarmeRequest('POST', `/customers/${customerId}/cards`, payload);
-  console.log('✅ Cartão registrado:', result.id, '| brand:', result.brand);
-  return result;
-}
-
 // ====== SUBSCRIPTIONS ======
 
-export async function createSubscription({ customerId, cardId, planAmount = 2990 }) {
+export async function createSubscription({ customerId, cardToken, billingAddress, planAmount = 2990 }) {
   const payload = {
     payment_method: 'credit_card',
     interval: 'month',
@@ -107,7 +142,10 @@ export async function createSubscription({ customerId, cardId, planAmount = 2990
     billing_type: 'prepaid',
     minimum_price: planAmount,
     customer_id: customerId,
-    card_id: cardId,
+    card_token: cardToken,
+    card: {
+      billing_address: billingAddress,
+    },
     pricing_scheme: {
       scheme_type: 'unit',
       price: planAmount,
@@ -126,7 +164,10 @@ export async function createSubscription({ customerId, cardId, planAmount = 2990
     result.charges.forEach((charge, i) => {
       console.log(`📋 Charge[${i}] status: ${charge.status}`);
       if (charge.last_transaction) {
-        console.log(`📋 Charge[${i}] last_transaction status: ${charge.last_transaction.status}`);
+        console.log(`📋 Charge[${i}] transaction: ${charge.last_transaction.status}`);
+        if (charge.last_transaction.gateway_response) {
+          console.log(`📋 Charge[${i}] gateway:`, JSON.stringify(charge.last_transaction.gateway_response));
+        }
       }
     });
   }
@@ -144,7 +185,7 @@ export async function getSubscription(subscriptionId) {
 
 // ====== ORDERS (para compra de múltiplos acessos) ======
 
-export async function createOrder({ customerId, cardId, quantity, unitPrice = 2990 }) {
+export async function createOrder({ customerId, cardToken, billingAddress, quantity, unitPrice = 2990 }) {
   const totalAmount = quantity * unitPrice;
 
   const payload = {
@@ -161,10 +202,13 @@ export async function createOrder({ customerId, cardId, quantity, unitPrice = 29
       {
         payment_method: 'credit_card',
         credit_card: {
-          card_id: cardId,
+          card_token: cardToken,
           operation_type: 'auth_and_capture',
           installments: 1,
           statement_descriptor: 'TUDONOAZUL',
+          card: {
+            billing_address: billingAddress,
+          },
         },
         amount: totalAmount,
       }

@@ -4,7 +4,7 @@ import { authenticateToken } from './auth.js';
 import getPool from '../db.js';
 import {
   createCustomer,
-  createCardOnCustomer,
+  tokenizeCard,
   createSubscription,
   cancelSubscription,
   getSubscription,
@@ -107,30 +107,32 @@ router.post('/subscribe', authenticateToken, async (req, res) => {
 
     const pool = getPool();
 
-    // Billing address para verificação de cartão
+    // Billing address (obrigatório pelo Pagar.me)
     const billingAddress = billing_address || {
-      line_1: '1, Rua Teste, Centro',
-      line_2: '',
-      zip_code: '01001000',
-      city: 'São Paulo',
-      state: 'SP',
+      line_1: '375, Av General Justo, Centro',
+      zip_code: '20021130',
+      city: 'Rio de Janeiro',
+      state: 'RJ',
       country: 'BR',
     };
 
     const cleanDocument = document.replace(/\D/g, '');
+
+    // Tokenizar cartão no Pagar.me
+    const cardToken = await tokenizeCard(card);
 
     // Atualizar nome se fornecido
     if (name) {
       await pool.query('UPDATE users SET name = $1 WHERE id = $2', [name, req.user.userId]);
     }
 
-    // Resetar customer se CPF mudou
+    // Resetar customer para recriar com dados atualizados
     await pool.query(
       'UPDATE users SET pagarme_customer_id = NULL WHERE id = $1',
       [req.user.userId]
     );
 
-    // Criar customer no Pagar.me (com CPF)
+    // Criar customer no Pagar.me (com CPF + telefone)
     const userResult = await pool.query(
       'SELECT email, name FROM users WHERE id = $1',
       [req.user.userId]
@@ -149,9 +151,6 @@ router.post('/subscribe', authenticateToken, async (req, res) => {
       [customerId, req.user.userId]
     );
 
-    // Registrar cartão no customer (dados brutos + billing_address)
-    const registeredCard = await createCardOnCustomer(customerId, card, cleanDocument, billingAddress);
-
     // Cancelar assinatura anterior se existir
     const existingSub = await pool.query(
       `SELECT pagarme_subscription_id FROM subscriptions 
@@ -166,10 +165,11 @@ router.post('/subscribe', authenticateToken, async (req, res) => {
       }
     }
 
-    // Criar assinatura no Pagar.me usando card_id
+    // Criar assinatura no Pagar.me (com token + billing_address)
     const subscription = await createSubscription({
       customerId,
-      cardId: registeredCard.id,
+      cardToken,
+      billingAddress,
       planAmount: 2990,
     });
 
@@ -294,17 +294,19 @@ router.post('/buy-access-codes', authenticateToken, async (req, res) => {
 
     const pool = getPool();
 
-    // Billing address para verificação de cartão
+    // Billing address (obrigatório pelo Pagar.me)
     const billingAddress = billing_address || {
-      line_1: '1, Rua Teste, Centro',
-      line_2: '',
-      zip_code: '01001000',
-      city: 'São Paulo',
-      state: 'SP',
+      line_1: '375, Av General Justo, Centro',
+      zip_code: '20021130',
+      city: 'Rio de Janeiro',
+      state: 'RJ',
       country: 'BR',
     };
 
     const cleanDocument = document.replace(/\D/g, '');
+
+    // Tokenizar cartão
+    const cardToken = await tokenizeCard(card);
 
     if (name) {
       await pool.query('UPDATE users SET name = $1 WHERE id = $2', [name, req.user.userId]);
@@ -313,7 +315,7 @@ router.post('/buy-access-codes', authenticateToken, async (req, res) => {
     // Resetar customer
     await pool.query('UPDATE users SET pagarme_customer_id = NULL WHERE id = $1', [req.user.userId]);
 
-    // Customer
+    // Customer (com telefone)
     const userResult = await pool.query('SELECT email, name FROM users WHERE id = $1', [req.user.userId]);
     const user = userResult.rows[0];
 
@@ -325,13 +327,11 @@ router.post('/buy-access-codes', authenticateToken, async (req, res) => {
     const customerId = customer.id;
     await pool.query('UPDATE users SET pagarme_customer_id = $1 WHERE id = $2', [customerId, req.user.userId]);
 
-    // Registrar cartão no customer
-    const registeredCard = await createCardOnCustomer(customerId, card, cleanDocument, billingAddress);
-
-    // Criar order no Pagar.me
+    // Criar order no Pagar.me (com token + billing_address)
     const order = await createOrder({
       customerId,
-      cardId: registeredCard.id,
+      cardToken,
+      billingAddress,
       quantity: qty,
       unitPrice: 2990,
     });
