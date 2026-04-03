@@ -50,52 +50,6 @@ async function pagarmeRequest(method, path, body = null) {
   return data;
 }
 
-// ====== TOKENIZAÇÃO DO CARTÃO (server-side) ======
-
-export async function tokenizeCard({ number, holder_name, exp_month, exp_year, cvv }) {
-  const publicKey = process.env.PAGARME_PUBLIC_KEY;
-  if (!publicKey) {
-    throw new Error('PAGARME_PUBLIC_KEY não está configurada');
-  }
-
-  const url = `${PAGARME_API_URL}/tokens?appId=${publicKey}`;
-
-  const response = await fetch(url, {
-    method: 'POST',
-    headers: {
-      'Content-Type': 'application/json',
-      'Accept': 'application/json',
-    },
-    body: JSON.stringify({
-      type: 'card',
-      card: {
-        number: String(number).replace(/\s/g, ''),
-        holder_name,
-        exp_month: parseInt(exp_month),
-        exp_year: parseInt(exp_year),
-        cvv: String(cvv),
-      },
-    }),
-  });
-
-  const text = await response.text();
-  let data;
-  try {
-    data = JSON.parse(text);
-  } catch {
-    console.error('❌ Tokenização resposta não-JSON:', text);
-    throw new Error('Erro ao tokenizar cartão');
-  }
-
-  if (!response.ok) {
-    console.error('❌ Tokenização erro:', JSON.stringify(data, null, 2));
-    throw new Error(data.message || 'Erro ao tokenizar cartão. Verifique os dados.');
-  }
-
-  console.log('✅ Cartão tokenizado:', data.id);
-  return data.id;
-}
-
 // ====== CUSTOMERS ======
 
 export async function createCustomer({ name, email, document, phone }) {
@@ -123,37 +77,29 @@ export async function getCustomer(customerId) {
   return pagarmeRequest('GET', `/customers/${customerId}`);
 }
 
-// ====== CARDS ======
+// ====== CARDS (dados brutos com billing_address para passar na verificação) ======
 
-export async function createCard(customerId, cardToken, billingAddress) {
-  console.log(`📋 Criando card para customer ${customerId} com token ${cardToken}`);
+export async function createCardOnCustomer(customerId, cardData, holderDocument, billingAddress) {
+  console.log(`📋 Registrando cartão no customer ${customerId} (dados brutos + billing_address)`);
   
   const payload = {
-    token: cardToken,
+    number: String(cardData.number).replace(/\s/g, ''),
+    holder_name: cardData.holder_name,
+    holder_document: holderDocument,
+    exp_month: parseInt(cardData.exp_month),
+    exp_year: parseInt(cardData.exp_year),
+    cvv: String(cardData.cvv),
+    billing_address: billingAddress,
   };
 
-  // Billing address é necessário para passar na verificação de cartão
-  if (billingAddress) {
-    payload.billing_address = billingAddress;
-  }
-
-  return pagarmeRequest('POST', `/customers/${customerId}/cards`, payload);
+  const result = await pagarmeRequest('POST', `/customers/${customerId}/cards`, payload);
+  console.log('✅ Cartão registrado:', result.id, '| brand:', result.brand);
+  return result;
 }
 
 // ====== SUBSCRIPTIONS ======
 
-export async function createSubscription({ customerId, cardToken, billingAddress, planAmount = 2990 }) {
-  // Primeiro, registrar o cartão no customer para evitar "card verification failed"
-  let cardId;
-  try {
-    const card = await createCard(customerId, cardToken, billingAddress);
-    cardId = card.id;
-    console.log('✅ Cartão registrado no customer:', cardId);
-  } catch (cardErr) {
-    console.warn('⚠️ Erro ao registrar cartão no customer, tentando com token direto:', cardErr.message);
-    // Fallback: tentar com card_token direto
-  }
-
+export async function createSubscription({ customerId, cardId, planAmount = 2990 }) {
   const payload = {
     payment_method: 'credit_card',
     interval: 'month',
@@ -161,7 +107,7 @@ export async function createSubscription({ customerId, cardToken, billingAddress
     billing_type: 'prepaid',
     minimum_price: planAmount,
     customer_id: customerId,
-    ...(cardId ? { card_id: cardId } : { card_token: cardToken }),
+    card_id: cardId,
     pricing_scheme: {
       scheme_type: 'unit',
       price: planAmount,
@@ -173,14 +119,14 @@ export async function createSubscription({ customerId, cardToken, billingAddress
 
   console.log('📋 Payload de assinatura:', JSON.stringify(payload, null, 2));
   const result = await pagarmeRequest('POST', '/subscriptions', payload);
-  console.log('📋 Resposta completa do Pagar.me (subscription):', JSON.stringify(result, null, 2));
+  console.log('📋 Subscription status:', result.status);
   
   // Log detalhado da cobrança
   if (result.charges) {
     result.charges.forEach((charge, i) => {
       console.log(`📋 Charge[${i}] status: ${charge.status}`);
       if (charge.last_transaction) {
-        console.log(`📋 Charge[${i}] last_transaction:`, JSON.stringify(charge.last_transaction, null, 2));
+        console.log(`📋 Charge[${i}] last_transaction status: ${charge.last_transaction.status}`);
       }
     });
   }
@@ -198,23 +144,8 @@ export async function getSubscription(subscriptionId) {
 
 // ====== ORDERS (para compra de múltiplos acessos) ======
 
-export async function createOrder({ customerId, cardToken, cardId, billingAddress, quantity, unitPrice = 2990 }) {
+export async function createOrder({ customerId, cardId, quantity, unitPrice = 2990 }) {
   const totalAmount = quantity * unitPrice;
-
-  // Se não temos cardId, tentar registrar o cartão primeiro
-  if (!cardId && cardToken) {
-    try {
-      const card = await createCard(customerId, cardToken, billingAddress);
-      cardId = card.id;
-      console.log('✅ Cartão registrado para order:', cardId);
-    } catch (cardErr) {
-      console.warn('⚠️ Erro ao registrar cartão para order, tentando com token:', cardErr.message);
-    }
-  }
-
-  const creditCardPayload = cardId
-    ? { card_id: cardId, operation_type: 'auth_and_capture', installments: 1, statement_descriptor: 'TUDONOAZUL' }
-    : { card_token: cardToken, operation_type: 'auth_and_capture', installments: 1, statement_descriptor: 'TUDONOAZUL' };
 
   const payload = {
     customer_id: customerId,
@@ -229,7 +160,12 @@ export async function createOrder({ customerId, cardToken, cardId, billingAddres
     payments: [
       {
         payment_method: 'credit_card',
-        credit_card: creditCardPayload,
+        credit_card: {
+          card_id: cardId,
+          operation_type: 'auth_and_capture',
+          installments: 1,
+          statement_descriptor: 'TUDONOAZUL',
+        },
         amount: totalAmount,
       }
     ],

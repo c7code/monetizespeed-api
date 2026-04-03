@@ -4,11 +4,11 @@ import { authenticateToken } from './auth.js';
 import getPool from '../db.js';
 import {
   createCustomer,
+  createCardOnCustomer,
   createSubscription,
   cancelSubscription,
   getSubscription,
   createOrder,
-  tokenizeCard,
 } from '../services/pagarme.js';
 
 const router = express.Router();
@@ -101,6 +101,10 @@ router.post('/subscribe', authenticateToken, async (req, res) => {
       return res.status(400).json({ error: 'Dados do cartão são obrigatórios' });
     }
 
+    if (!document) {
+      return res.status(400).json({ error: 'CPF é obrigatório' });
+    }
+
     const pool = getPool();
 
     // Billing address para verificação de cartão
@@ -113,45 +117,40 @@ router.post('/subscribe', authenticateToken, async (req, res) => {
       country: 'BR',
     };
 
-    // Tokenizar cartão no Pagar.me
-    const cardToken = await tokenizeCard(card);
-
-    // Atualizar CPF do usuário se fornecido
-    if (document) {
-      await pool.query(
-        'UPDATE users SET pagarme_customer_id = NULL WHERE id = $1',
-        [req.user.userId]
-      );
-    }
+    const cleanDocument = document.replace(/\D/g, '');
 
     // Atualizar nome se fornecido
     if (name) {
       await pool.query('UPDATE users SET name = $1 WHERE id = $2', [name, req.user.userId]);
     }
 
-    // Criar ou buscar customer no Pagar.me (com CPF atualizado)
-    let customerId;
-    if (document) {
-      const userResult = await pool.query(
-        'SELECT email, name FROM users WHERE id = $1',
-        [req.user.userId]
-      );
-      const user = userResult.rows[0];
+    // Resetar customer se CPF mudou
+    await pool.query(
+      'UPDATE users SET pagarme_customer_id = NULL WHERE id = $1',
+      [req.user.userId]
+    );
 
-      const customer = await createCustomer({
-        name: name || user.name || user.email.split('@')[0],
-        email: user.email,
-        document: document.replace(/\D/g, ''),
-      });
+    // Criar customer no Pagar.me (com CPF)
+    const userResult = await pool.query(
+      'SELECT email, name FROM users WHERE id = $1',
+      [req.user.userId]
+    );
+    const user = userResult.rows[0];
 
-      customerId = customer.id;
-      await pool.query(
-        'UPDATE users SET pagarme_customer_id = $1 WHERE id = $2',
-        [customerId, req.user.userId]
-      );
-    } else {
-      customerId = await ensurePagarmeCustomer(pool, req.user.userId);
-    }
+    const customer = await createCustomer({
+      name: name || user.name || user.email.split('@')[0],
+      email: user.email,
+      document: cleanDocument,
+    });
+
+    const customerId = customer.id;
+    await pool.query(
+      'UPDATE users SET pagarme_customer_id = $1 WHERE id = $2',
+      [customerId, req.user.userId]
+    );
+
+    // Registrar cartão no customer (dados brutos + billing_address)
+    const registeredCard = await createCardOnCustomer(customerId, card, cleanDocument, billingAddress);
 
     // Cancelar assinatura anterior se existir
     const existingSub = await pool.query(
@@ -167,11 +166,10 @@ router.post('/subscribe', authenticateToken, async (req, res) => {
       }
     }
 
-    // Criar assinatura no Pagar.me
+    // Criar assinatura no Pagar.me usando card_id
     const subscription = await createSubscription({
       customerId,
-      cardToken,
-      billingAddress,
+      cardId: registeredCard.id,
       planAmount: 2990,
     });
 
@@ -285,6 +283,10 @@ router.post('/buy-access-codes', authenticateToken, async (req, res) => {
       return res.status(400).json({ error: 'Dados do cartão são obrigatórios' });
     }
 
+    if (!document) {
+      return res.status(400).json({ error: 'CPF é obrigatório' });
+    }
+
     const qty = parseInt(quantity);
     if (!qty || qty < 1 || qty > 50) {
       return res.status(400).json({ error: 'Quantidade deve ser entre 1 e 50' });
@@ -302,39 +304,34 @@ router.post('/buy-access-codes', authenticateToken, async (req, res) => {
       country: 'BR',
     };
 
-    // Tokenizar cartão
-    const cardToken = await tokenizeCard(card);
+    const cleanDocument = document.replace(/\D/g, '');
 
-    // Atualizar CPF se fornecido
-    if (document) {
-      await pool.query('UPDATE users SET pagarme_customer_id = NULL WHERE id = $1', [req.user.userId]);
-    }
     if (name) {
       await pool.query('UPDATE users SET name = $1 WHERE id = $2', [name, req.user.userId]);
     }
 
-    // Customer
-    let customerId;
-    if (document) {
-      const userResult = await pool.query('SELECT email, name FROM users WHERE id = $1', [req.user.userId]);
-      const user = userResult.rows[0];
+    // Resetar customer
+    await pool.query('UPDATE users SET pagarme_customer_id = NULL WHERE id = $1', [req.user.userId]);
 
-      const customer = await createCustomer({
-        name: name || user.name || user.email.split('@')[0],
-        email: user.email,
-        document: document.replace(/\D/g, ''),
-      });
-      customerId = customer.id;
-      await pool.query('UPDATE users SET pagarme_customer_id = $1 WHERE id = $2', [customerId, req.user.userId]);
-    } else {
-      customerId = await ensurePagarmeCustomer(pool, req.user.userId);
-    }
+    // Customer
+    const userResult = await pool.query('SELECT email, name FROM users WHERE id = $1', [req.user.userId]);
+    const user = userResult.rows[0];
+
+    const customer = await createCustomer({
+      name: name || user.name || user.email.split('@')[0],
+      email: user.email,
+      document: cleanDocument,
+    });
+    const customerId = customer.id;
+    await pool.query('UPDATE users SET pagarme_customer_id = $1 WHERE id = $2', [customerId, req.user.userId]);
+
+    // Registrar cartão no customer
+    const registeredCard = await createCardOnCustomer(customerId, card, cleanDocument, billingAddress);
 
     // Criar order no Pagar.me
     const order = await createOrder({
       customerId,
-      cardToken,
-      billingAddress,
+      cardId: registeredCard.id,
       quantity: qty,
       unitPrice: 2990,
     });
