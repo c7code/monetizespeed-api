@@ -2,7 +2,7 @@ import 'dotenv/config';
 import express from 'express';
 import cors from 'cors';
 import { initDatabase } from './db.js';
-import authRoutes from './routes/auth.js';
+import authRoutes, { authenticateToken, requirePremium } from './routes/auth.js';
 import transactionsRoutes from './routes/transactions.js';
 import budgetsRoutes from './routes/budgets.js';
 import goalsRoutes from './routes/goals.js';
@@ -106,22 +106,25 @@ app.get('/', (req, res) => {
   });
 });
 
+// Rotas livres (não requerem plano premium)
 app.use('/api/auth', authRoutes);
 app.use('/api/transactions', transactionsRoutes);
 app.use('/api/budgets', budgetsRoutes);
 app.use('/api/goals', goalsRoutes);
 app.use('/api/webhook', webhookRoutes);
 app.use('/api/user', userRoutes);
-app.use('/api/credit-cards', creditCardsRoutes);
-app.use('/api/wallets', walletsRoutes);
-app.use('/api/streamings', streamingsRoutes);
-app.use('/api/bills', billsRoutes);
-app.use('/api/receivables', receivablesRoutes);
-app.use('/api/audio', audioRoutes);
-app.use('/api/image', imageRoutes);
-app.use('/webhooks/twilio', whatsappWebhookRoutes);
 app.use('/api/payments', paymentsRoutes);
+app.use('/webhooks/twilio', whatsappWebhookRoutes);
 app.use('/webhooks/pagarme', webhookPagarmeRoutes);
+
+// Rotas premium (requerem plano ativo)
+app.use('/api/credit-cards', authenticateToken, requirePremium, creditCardsRoutes);
+app.use('/api/wallets', authenticateToken, requirePremium, walletsRoutes);
+app.use('/api/streamings', authenticateToken, requirePremium, streamingsRoutes);
+app.use('/api/bills', authenticateToken, requirePremium, billsRoutes);
+app.use('/api/receivables', authenticateToken, requirePremium, receivablesRoutes);
+app.use('/api/audio', authenticateToken, requirePremium, audioRoutes);
+app.use('/api/image', authenticateToken, requirePremium, imageRoutes);
 
 app.get('/api/health', (req, res) => {
   res.json({ status: 'ok', message: 'MonetizeSpeed API está funcionando' });

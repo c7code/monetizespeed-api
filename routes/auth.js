@@ -362,6 +362,45 @@ export function authenticateToken(req, res, next) {
   });
 }
 
+// Verificar se o usuário tem plano premium ativo (usar APÓS authenticateToken)
+export async function requirePremium(req, res, next) {
+  try {
+    const pool = getPool();
+    const result = await pool.query(
+      'SELECT plan_status, plan_expires_at FROM users WHERE id = $1',
+      [req.user.userId]
+    );
+
+    if (result.rows.length === 0) {
+      return res.status(404).json({ error: 'Usuário não encontrado' });
+    }
+
+    const user = result.rows[0];
+
+    // Auto-expirar plano se a data já passou
+    if (user.plan_status === 'active' && user.plan_expires_at && new Date(user.plan_expires_at) < new Date()) {
+      await pool.query(
+        `UPDATE users SET plan_status = 'expired' WHERE id = $1`,
+        [req.user.userId]
+      );
+      user.plan_status = 'expired';
+    }
+
+    if (user.plan_status !== 'active') {
+      return res.status(403).json({
+        error: 'Acesso restrito a assinantes',
+        message: 'Assine o plano premium para acessar esta funcionalidade.',
+        plan_status: user.plan_status || 'free',
+      });
+    }
+
+    next();
+  } catch (error) {
+    console.error('Erro ao verificar plano:', error);
+    res.status(500).json({ error: 'Erro ao verificar plano' });
+  }
+}
+
 // Rota para verificar token válido
 router.get('/verify', authenticateToken, async (req, res) => {
   try {
