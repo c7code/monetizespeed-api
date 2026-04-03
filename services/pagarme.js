@@ -125,20 +125,28 @@ export async function getCustomer(customerId) {
 
 // ====== CARDS ======
 
-export async function createCard(customerId, cardToken) {
+export async function createCard(customerId, cardToken, billingAddress) {
   console.log(`📋 Criando card para customer ${customerId} com token ${cardToken}`);
-  return pagarmeRequest('POST', `/customers/${customerId}/cards`, {
+  
+  const payload = {
     token: cardToken,
-  });
+  };
+
+  // Billing address é necessário para passar na verificação de cartão
+  if (billingAddress) {
+    payload.billing_address = billingAddress;
+  }
+
+  return pagarmeRequest('POST', `/customers/${customerId}/cards`, payload);
 }
 
 // ====== SUBSCRIPTIONS ======
 
-export async function createSubscription({ customerId, cardToken, planAmount = 2990 }) {
+export async function createSubscription({ customerId, cardToken, billingAddress, planAmount = 2990 }) {
   // Primeiro, registrar o cartão no customer para evitar "card verification failed"
   let cardId;
   try {
-    const card = await createCard(customerId, cardToken);
+    const card = await createCard(customerId, cardToken, billingAddress);
     cardId = card.id;
     console.log('✅ Cartão registrado no customer:', cardId);
   } catch (cardErr) {
@@ -190,13 +198,13 @@ export async function getSubscription(subscriptionId) {
 
 // ====== ORDERS (para compra de múltiplos acessos) ======
 
-export async function createOrder({ customerId, cardToken, cardId, quantity, unitPrice = 2990 }) {
+export async function createOrder({ customerId, cardToken, cardId, billingAddress, quantity, unitPrice = 2990 }) {
   const totalAmount = quantity * unitPrice;
 
   // Se não temos cardId, tentar registrar o cartão primeiro
   if (!cardId && cardToken) {
     try {
-      const card = await createCard(customerId, cardToken);
+      const card = await createCard(customerId, cardToken, billingAddress);
       cardId = card.id;
       console.log('✅ Cartão registrado para order:', cardId);
     } catch (cardErr) {

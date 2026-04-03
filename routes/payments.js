@@ -95,13 +95,23 @@ router.get('/status', authenticateToken, async (req, res) => {
 
 router.post('/subscribe', authenticateToken, async (req, res) => {
   try {
-    const { card, document, name } = req.body;
+    const { card, document, name, billing_address } = req.body;
 
     if (!card || !card.number) {
       return res.status(400).json({ error: 'Dados do cartão são obrigatórios' });
     }
 
     const pool = getPool();
+
+    // Billing address para verificação de cartão
+    const billingAddress = billing_address || {
+      line_1: '1, Rua Teste, Centro',
+      line_2: '',
+      zip_code: '01001000',
+      city: 'São Paulo',
+      state: 'SP',
+      country: 'BR',
+    };
 
     // Tokenizar cartão no Pagar.me
     const cardToken = await tokenizeCard(card);
@@ -161,6 +171,7 @@ router.post('/subscribe', authenticateToken, async (req, res) => {
     const subscription = await createSubscription({
       customerId,
       cardToken,
+      billingAddress,
       planAmount: 2990,
     });
 
@@ -268,7 +279,7 @@ router.post('/cancel-subscription', authenticateToken, async (req, res) => {
 
 router.post('/buy-access-codes', authenticateToken, async (req, res) => {
   try {
-    const { card, document, name, quantity } = req.body;
+    const { card, document, name, quantity, billing_address } = req.body;
 
     if (!card || !card.number) {
       return res.status(400).json({ error: 'Dados do cartão são obrigatórios' });
@@ -280,6 +291,16 @@ router.post('/buy-access-codes', authenticateToken, async (req, res) => {
     }
 
     const pool = getPool();
+
+    // Billing address para verificação de cartão
+    const billingAddress = billing_address || {
+      line_1: '1, Rua Teste, Centro',
+      line_2: '',
+      zip_code: '01001000',
+      city: 'São Paulo',
+      state: 'SP',
+      country: 'BR',
+    };
 
     // Tokenizar cartão
     const cardToken = await tokenizeCard(card);
@@ -313,6 +334,7 @@ router.post('/buy-access-codes', authenticateToken, async (req, res) => {
     const order = await createOrder({
       customerId,
       cardToken,
+      billingAddress,
       quantity: qty,
       unitPrice: 2990,
     });
