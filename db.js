@@ -396,6 +396,58 @@ export async function initDatabase() {
       )
     `);
 
+    // Adicionar campo plan_status na tabela users
+    await dbPool.query(`
+      DO $$ 
+      BEGIN
+        IF NOT EXISTS (
+          SELECT 1 FROM information_schema.columns 
+          WHERE table_name='users' AND column_name='plan_status'
+        ) THEN
+          ALTER TABLE users ADD COLUMN plan_status VARCHAR(20) DEFAULT 'free';
+        END IF;
+        IF NOT EXISTS (
+          SELECT 1 FROM information_schema.columns 
+          WHERE table_name='users' AND column_name='plan_expires_at'
+        ) THEN
+          ALTER TABLE users ADD COLUMN plan_expires_at TIMESTAMP;
+        END IF;
+        IF NOT EXISTS (
+          SELECT 1 FROM information_schema.columns 
+          WHERE table_name='users' AND column_name='pagarme_customer_id'
+        ) THEN
+          ALTER TABLE users ADD COLUMN pagarme_customer_id VARCHAR(255);
+        END IF;
+      END $$;
+    `);
+
+    await dbPool.query(`
+      CREATE TABLE IF NOT EXISTS subscriptions (
+        id SERIAL PRIMARY KEY,
+        user_id INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+        pagarme_subscription_id VARCHAR(255) UNIQUE,
+        status VARCHAR(30) DEFAULT 'pending' CHECK (status IN ('pending', 'active', 'canceled', 'past_due', 'ended')),
+        current_period_end TIMESTAMP,
+        plan_amount INTEGER DEFAULT 2990,
+        created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+        updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+      )
+    `);
+
+    await dbPool.query(`
+      CREATE TABLE IF NOT EXISTS access_codes (
+        id SERIAL PRIMARY KEY,
+        code VARCHAR(20) UNIQUE NOT NULL,
+        purchaser_user_id INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+        order_id VARCHAR(255),
+        status VARCHAR(20) DEFAULT 'active' CHECK (status IN ('active', 'redeemed')),
+        redeemed_by_user_id INTEGER REFERENCES users(id) ON DELETE SET NULL,
+        duration_days INTEGER DEFAULT 30,
+        created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+        redeemed_at TIMESTAMP
+      )
+    `);
+
     console.log('✅ Tabelas criadas/verificadas com sucesso');
   } catch (error) {
     console.error('❌ Erro ao criar tabelas:', error);

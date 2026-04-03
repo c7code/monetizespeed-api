@@ -62,7 +62,9 @@ router.post('/register', async (req, res) => {
       user: {
         id: user.id,
         email: user.email,
-        name: user.name
+        name: user.name,
+        plan_status: 'free',
+        plan_expires_at: null
       }
     });
   } catch (error) {
@@ -96,7 +98,7 @@ router.post('/login', async (req, res) => {
     let result;
     try {
       result = await pool.query(
-        'SELECT id, email, password_hash, name FROM users WHERE email = $1',
+        'SELECT id, email, password_hash, name, plan_status, plan_expires_at FROM users WHERE email = $1',
         [email.toLowerCase()]
       );
     } catch (queryError) {
@@ -152,7 +154,9 @@ router.post('/login', async (req, res) => {
       user: {
         id: user.id,
         email: user.email,
-        name: user.name
+        name: user.name,
+        plan_status: user.plan_status || 'free',
+        plan_expires_at: user.plan_expires_at
       }
     });
   } catch (error) {
@@ -363,7 +367,7 @@ router.get('/verify', authenticateToken, async (req, res) => {
   try {
     const pool = getPool();
     const result = await pool.query(
-      'SELECT id, email, name FROM users WHERE id = $1',
+      'SELECT id, email, name, plan_status, plan_expires_at FROM users WHERE id = $1',
       [req.user.userId]
     );
 
@@ -371,8 +375,25 @@ router.get('/verify', authenticateToken, async (req, res) => {
       return res.status(404).json({ error: 'Usuário não encontrado' });
     }
 
+    const user = result.rows[0];
+
+    // Auto-expirar plano se a data já passou
+    if (user.plan_status === 'active' && user.plan_expires_at && new Date(user.plan_expires_at) < new Date()) {
+      await pool.query(
+        `UPDATE users SET plan_status = 'expired' WHERE id = $1`,
+        [user.id]
+      );
+      user.plan_status = 'expired';
+    }
+
     res.json({
-      user: result.rows[0]
+      user: {
+        id: user.id,
+        email: user.email,
+        name: user.name,
+        plan_status: user.plan_status || 'free',
+        plan_expires_at: user.plan_expires_at,
+      }
     });
   } catch (error) {
     console.error('Erro ao verificar token:', error);
