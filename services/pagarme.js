@@ -6,7 +6,6 @@ function getAuthHeader() {
   if (!secretKey) {
     throw new Error('PAGARME_SECRET_KEY não está configurada');
   }
-  // Basic Auth: sk_xxx: (chave secreta + ":" em base64)
   const encoded = Buffer.from(`${secretKey}:`).toString('base64');
   return `Basic ${encoded}`;
 }
@@ -29,7 +28,15 @@ async function pagarmeRequest(method, path, body = null) {
   console.log(`📡 Pagar.me ${method} ${path}`);
 
   const response = await fetch(url, options);
-  const data = await response.json();
+  const text = await response.text();
+
+  let data;
+  try {
+    data = JSON.parse(text);
+  } catch {
+    console.error('❌ Pagar.me resposta não-JSON:', text);
+    throw new Error('Resposta inválida do Pagar.me');
+  }
 
   if (!response.ok) {
     console.error('❌ Pagar.me erro:', JSON.stringify(data, null, 2));
@@ -41,6 +48,52 @@ async function pagarmeRequest(method, path, body = null) {
   }
 
   return data;
+}
+
+// ====== TOKENIZAÇÃO DO CARTÃO (server-side) ======
+
+export async function tokenizeCard({ number, holder_name, exp_month, exp_year, cvv }) {
+  const publicKey = process.env.PAGARME_PUBLIC_KEY;
+  if (!publicKey) {
+    throw new Error('PAGARME_PUBLIC_KEY não está configurada');
+  }
+
+  const url = `${PAGARME_API_URL}/tokens?appId=${publicKey}`;
+
+  const response = await fetch(url, {
+    method: 'POST',
+    headers: {
+      'Content-Type': 'application/json',
+      'Accept': 'application/json',
+    },
+    body: JSON.stringify({
+      type: 'card',
+      card: {
+        number: String(number).replace(/\s/g, ''),
+        holder_name,
+        exp_month: parseInt(exp_month),
+        exp_year: parseInt(exp_year),
+        cvv: String(cvv),
+      },
+    }),
+  });
+
+  const text = await response.text();
+  let data;
+  try {
+    data = JSON.parse(text);
+  } catch {
+    console.error('❌ Tokenização resposta não-JSON:', text);
+    throw new Error('Erro ao tokenizar cartão');
+  }
+
+  if (!response.ok) {
+    console.error('❌ Tokenização erro:', JSON.stringify(data, null, 2));
+    throw new Error(data.message || 'Erro ao tokenizar cartão. Verifique os dados.');
+  }
+
+  console.log('✅ Cartão tokenizado:', data.id);
+  return data.id;
 }
 
 // ====== CUSTOMERS ======
@@ -70,7 +123,6 @@ export async function getCustomer(customerId) {
 // ====== SUBSCRIPTIONS ======
 
 export async function createSubscription({ customerId, cardToken, planAmount = 2990 }) {
-  // Assinatura mensal de R$ 29,90 (valor em centavos)
   const payload = {
     payment_method: 'credit_card',
     interval: 'month',

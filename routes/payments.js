@@ -8,6 +8,7 @@ import {
   cancelSubscription,
   getSubscription,
   createOrder,
+  tokenizeCard,
 } from '../services/pagarme.js';
 
 const router = express.Router();
@@ -94,17 +95,19 @@ router.get('/status', authenticateToken, async (req, res) => {
 
 router.post('/subscribe', authenticateToken, async (req, res) => {
   try {
-    const { cardToken, document, name } = req.body;
+    const { card, document, name } = req.body;
 
-    if (!cardToken) {
-      return res.status(400).json({ error: 'Token do cartão é obrigatório' });
+    if (!card || !card.number) {
+      return res.status(400).json({ error: 'Dados do cartão são obrigatórios' });
     }
 
     const pool = getPool();
 
+    // Tokenizar cartão no Pagar.me
+    const cardToken = await tokenizeCard(card);
+
     // Atualizar CPF do usuário se fornecido
     if (document) {
-      // Limpar CPF existente no Pagar.me — vamos recriar
       await pool.query(
         'UPDATE users SET pagarme_customer_id = NULL WHERE id = $1',
         [req.user.userId]
@@ -158,7 +161,7 @@ router.post('/subscribe', authenticateToken, async (req, res) => {
     const subscription = await createSubscription({
       customerId,
       cardToken,
-      planAmount: 2990, // R$ 29,90
+      planAmount: 2990,
     });
 
     // Salvar no banco
@@ -242,10 +245,10 @@ router.post('/cancel-subscription', authenticateToken, async (req, res) => {
 
 router.post('/buy-access-codes', authenticateToken, async (req, res) => {
   try {
-    const { cardToken, document, name, quantity } = req.body;
+    const { card, document, name, quantity } = req.body;
 
-    if (!cardToken) {
-      return res.status(400).json({ error: 'Token do cartão é obrigatório' });
+    if (!card || !card.number) {
+      return res.status(400).json({ error: 'Dados do cartão são obrigatórios' });
     }
 
     const qty = parseInt(quantity);
@@ -254,6 +257,9 @@ router.post('/buy-access-codes', authenticateToken, async (req, res) => {
     }
 
     const pool = getPool();
+
+    // Tokenizar cartão
+    const cardToken = await tokenizeCard(card);
 
     // Atualizar CPF se fornecido
     if (document) {
@@ -285,7 +291,7 @@ router.post('/buy-access-codes', authenticateToken, async (req, res) => {
       customerId,
       cardToken,
       quantity: qty,
-      unitPrice: 2990, // R$ 29,90 cada
+      unitPrice: 2990,
     });
 
     // Se o pagamento foi aprovado, gerar os códigos
