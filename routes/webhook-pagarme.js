@@ -12,9 +12,14 @@ function generateAccessCode() {
 // Verificar assinatura do webhook do Pagar.me (HMAC SHA256)
 function verifyWebhookSignature(req) {
   const signature = req.headers['x-hub-signature'];
-  if (!signature || !process.env.PAGARME_WEBHOOK_SECRET) {
-    // Se não há segredo configurado, aceitar (dev/testing)
-    console.warn('⚠️ Webhook sem verificação de assinatura (PAGARME_WEBHOOK_SECRET não configurado)');
+  
+  if (!process.env.PAGARME_WEBHOOK_SECRET) {
+    console.warn('⚠️ PAGARME_WEBHOOK_SECRET não configurado — aceitando webhook sem verificação');
+    return true;
+  }
+
+  if (!signature) {
+    console.warn('⚠️ Webhook recebido sem header x-hub-signature — aceitando sem verificação');
     return true;
   }
 
