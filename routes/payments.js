@@ -164,7 +164,15 @@ router.post('/subscribe', authenticateToken, async (req, res) => {
       planAmount: 2990,
     });
 
-    // Salvar no banco
+    console.log('📋 Subscription response:', JSON.stringify(subscription, null, 2));
+
+    // Verificar se a primeira cobrança foi aprovada
+    const isApproved = subscription.status === 'active';
+    const chargeStatus = subscription.current_cycle?.cycle?.status ||
+      subscription.charges?.[0]?.last_transaction?.status;
+
+    // Salvar no banco (mesmo que pendente, para rastrear)
+    const subStatus = isApproved ? 'active' : 'failed';
     await pool.query(
       `INSERT INTO subscriptions (user_id, pagarme_subscription_id, status, current_period_end)
        VALUES ($1, $2, $3, $4)
@@ -173,27 +181,42 @@ router.post('/subscribe', authenticateToken, async (req, res) => {
       [
         req.user.userId,
         subscription.id,
-        subscription.status === 'active' ? 'active' : 'pending',
-        subscription.current_cycle?.end_at || new Date(Date.now() + 30 * 24 * 60 * 60 * 1000),
+        subStatus,
+        subscription.current_cycle?.end_at || null,
       ]
     );
 
-    // Atualizar status do usuário
-    const expiresAt = subscription.current_cycle?.end_at || new Date(Date.now() + 30 * 24 * 60 * 60 * 1000);
-    await pool.query(
-      `UPDATE users SET plan_status = 'active', plan_expires_at = $1 WHERE id = $2`,
-      [expiresAt, req.user.userId]
-    );
+    // Só ativar o plano se o pagamento foi aprovado
+    if (isApproved) {
+      const expiresAt = subscription.current_cycle?.end_at || new Date(Date.now() + 30 * 24 * 60 * 60 * 1000);
+      await pool.query(
+        `UPDATE users SET plan_status = 'active', plan_expires_at = $1 WHERE id = $2`,
+        [expiresAt, req.user.userId]
+      );
 
-    res.json({
-      message: 'Assinatura criada com sucesso!',
-      subscription: {
-        id: subscription.id,
-        status: subscription.status,
-      },
-      plan_status: 'active',
-      plan_expires_at: expiresAt,
-    });
+      res.json({
+        message: 'Assinatura criada com sucesso! 🎉',
+        subscription: {
+          id: subscription.id,
+          status: subscription.status,
+        },
+        plan_status: 'active',
+        plan_expires_at: expiresAt,
+      });
+    } else {
+      // Pagamento NÃO aprovado — não liberar acesso
+      // Tentar cancelar a assinatura pendente no Pagar.me
+      try {
+        await cancelSubscription(subscription.id);
+      } catch (e) {
+        console.warn('⚠️ Erro ao cancelar assinatura não aprovada:', e.message);
+      }
+
+      res.status(402).json({
+        error: 'Pagamento não autorizado. Verifique os dados do cartão e tente novamente.',
+        details: chargeStatus || subscription.status,
+      });
+    }
   } catch (error) {
     console.error('Erro ao criar assinatura:', error);
     res.status(error.statusCode || 500).json({
@@ -318,13 +341,19 @@ router.post('/buy-access-codes', authenticateToken, async (req, res) => {
       }
     }
 
+    if (!isPaid) {
+      return res.status(402).json({
+        error: 'Pagamento não autorizado. Verifique os dados do cartão e tente novamente.',
+        order_id: order.id,
+        order_status: order.status,
+      });
+    }
+
     res.json({
-      message: isPaid
-        ? `${qty} código(s) de acesso gerado(s) com sucesso!`
-        : 'Pedido criado, aguardando confirmação de pagamento.',
+      message: `${qty} código(s) de acesso gerado(s) com sucesso! 🎟️`,
       order_id: order.id,
       order_status: order.status,
-      codes: isPaid ? codes : [],
+      codes,
     });
   } catch (error) {
     console.error('Erro ao comprar códigos de acesso:', error);
