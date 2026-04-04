@@ -10,6 +10,7 @@ import {
   getSubscription,
   createOrder,
 } from '../services/pagarme.js';
+import { sendAccessCodesEmail, sendSubscriptionConfirmEmail } from '../services/emailService.js';
 
 const router = express.Router();
 
@@ -204,6 +205,11 @@ router.post('/subscribe', authenticateToken, async (req, res) => {
         [expiresAt, req.user.userId]
       );
 
+      // Enviar email de confirmação (em background, não bloqueia a resposta)
+      const userEmail = user.email;
+      const userName = name || user.name;
+      sendSubscriptionConfirmEmail(userEmail, userName, expiresAt).catch(() => {});
+
       res.json({
         message: 'Assinatura criada com sucesso! 🎉',
         subscription: {
@@ -370,8 +376,13 @@ router.post('/buy-access-codes', authenticateToken, async (req, res) => {
       });
     }
 
+    // Enviar códigos por email (em background, não bloqueia a resposta)
+    const userEmail = user.email;
+    const userName = name || user.name;
+    sendAccessCodesEmail(userEmail, userName, codes).catch(() => {});
+
     res.json({
-      message: `${qty} código(s) de acesso gerado(s) com sucesso! 🎟️`,
+      message: `${qty} código(s) de acesso gerado(s) com sucesso! 🎟️ Enviamos os códigos para seu email.`,
       order_id: order.id,
       order_status: order.status,
       codes,
