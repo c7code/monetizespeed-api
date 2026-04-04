@@ -134,18 +134,14 @@ export async function getCustomer(customerId) {
 
 // ====== SUBSCRIPTIONS ======
 
-export async function createSubscription({ customerId, cardToken, billingAddress, planAmount = 2990 }) {
+export async function createSubscription({ customerId, cardToken, billingAddress, planAmount = 2990, paymentMethod = 'credit_card' }) {
   const payload = {
-    payment_method: 'credit_card',
+    payment_method: paymentMethod,
     interval: 'month',
     interval_count: 1,
     billing_type: 'prepaid',
     minimum_price: planAmount,
     customer_id: customerId,
-    card_token: cardToken,
-    card: {
-      billing_address: billingAddress,
-    },
     pricing_scheme: {
       scheme_type: 'unit',
       price: planAmount,
@@ -154,6 +150,13 @@ export async function createSubscription({ customerId, cardToken, billingAddress
     description: 'Assinatura Tudo no Azul - Plano Mensal',
     statement_descriptor: 'TUDONOAZUL',
   };
+
+  // Dados específicos do método de pagamento
+  if (paymentMethod === 'credit_card') {
+    payload.card_token = cardToken;
+    payload.card = { billing_address: billingAddress };
+  }
+  // PIX não precisa de campos extras — o Pagar.me gera o QR Code automaticamente
 
   console.log('📋 Payload de assinatura:', JSON.stringify(payload, null, 2));
   const result = await pagarmeRequest('POST', '/subscriptions', payload);
@@ -167,6 +170,10 @@ export async function createSubscription({ customerId, cardToken, billingAddress
         console.log(`📋 Charge[${i}] transaction: ${charge.last_transaction.status}`);
         if (charge.last_transaction.gateway_response) {
           console.log(`📋 Charge[${i}] gateway:`, JSON.stringify(charge.last_transaction.gateway_response));
+        }
+        // Log PIX data se existir
+        if (charge.last_transaction.qr_code) {
+          console.log(`📋 Charge[${i}] PIX QR Code: presente`);
         }
       }
     });
@@ -185,8 +192,34 @@ export async function getSubscription(subscriptionId) {
 
 // ====== ORDERS (para compra de múltiplos acessos) ======
 
-export async function createOrder({ customerId, cardToken, billingAddress, quantity, unitPrice = 2990 }) {
+export async function createOrder({ customerId, cardToken, billingAddress, quantity, unitPrice = 2990, paymentMethod = 'credit_card' }) {
   const totalAmount = quantity * unitPrice;
+
+  // Montar payment conforme o método escolhido
+  let payment;
+  if (paymentMethod === 'pix') {
+    payment = {
+      payment_method: 'pix',
+      pix: {
+        expires_in: 3600, // QR Code válido por 1 hora
+      },
+      amount: totalAmount,
+    };
+  } else {
+    payment = {
+      payment_method: 'credit_card',
+      credit_card: {
+        card_token: cardToken,
+        operation_type: 'auth_and_capture',
+        installments: 1,
+        statement_descriptor: 'TUDONOAZUL',
+        card: {
+          billing_address: billingAddress,
+        },
+      },
+      amount: totalAmount,
+    };
+  }
 
   const payload = {
     customer_id: customerId,
@@ -198,21 +231,7 @@ export async function createOrder({ customerId, cardToken, billingAddress, quant
         code: `ACCESS_CODE_${quantity}x`,
       }
     ],
-    payments: [
-      {
-        payment_method: 'credit_card',
-        credit_card: {
-          card_token: cardToken,
-          operation_type: 'auth_and_capture',
-          installments: 1,
-          statement_descriptor: 'TUDONOAZUL',
-          card: {
-            billing_address: billingAddress,
-          },
-        },
-        amount: totalAmount,
-      }
-    ],
+    payments: [payment],
   };
 
   return pagarmeRequest('POST', '/orders', payload);

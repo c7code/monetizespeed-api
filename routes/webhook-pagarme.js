@@ -1,6 +1,7 @@
 import express from 'express';
 import crypto from 'crypto';
 import getPool from '../db.js';
+import { sendAccessCodesEmail, sendSubscriptionConfirmEmail } from '../services/emailService.js';
 
 const router = express.Router();
 
@@ -112,23 +113,34 @@ router.post('/', async (req, res) => {
         const subscriptionId = data.subscription_id || data.subscription?.id;
 
         if (subscriptionId) {
-          // Renovação de assinatura paga — estender período
+          // Renovação/pagamento de assinatura (inclui PIX)
           const subRow = await pool.query(
             'SELECT user_id FROM subscriptions WHERE pagarme_subscription_id = $1',
             [subscriptionId]
           );
 
           if (subRow.rows.length > 0) {
+            const userId = subRow.rows[0].user_id;
             const newExpires = new Date(Date.now() + 30 * 24 * 60 * 60 * 1000);
             await pool.query(
               `UPDATE users SET plan_status = 'active', plan_expires_at = $1 WHERE id = $2`,
-              [newExpires, subRow.rows[0].user_id]
+              [newExpires, userId]
             );
             await pool.query(
               `UPDATE subscriptions SET status = 'active', current_period_end = $1, updated_at = NOW()
                WHERE pagarme_subscription_id = $2`,
               [newExpires, subscriptionId]
             );
+
+            // Enviar email de confirmação (especialmente importante para PIX)
+            try {
+              const userRow = await pool.query('SELECT email, name FROM users WHERE id = $1', [userId]);
+              if (userRow.rows.length > 0) {
+                sendSubscriptionConfirmEmail(userRow.rows[0].email, userRow.rows[0].name, newExpires).catch(() => {});
+              }
+            } catch (emailErr) {
+              console.warn('⚠️ Erro ao enviar email no webhook:', emailErr.message);
+            }
           }
         }
         break;
@@ -182,6 +194,7 @@ router.post('/', async (req, res) => {
         const userId = userResult.rows[0].id;
 
         // Gerar códigos
+        const generatedCodes = [];
         for (let i = 0; i < totalItems; i++) {
           let code;
           let unique = false;
@@ -196,6 +209,17 @@ router.post('/', async (req, res) => {
              VALUES ($1, $2, $3, 'active', 30)`,
             [code, userId, order.id]
           );
+          generatedCodes.push(code);
+        }
+
+        // Enviar codes por email (importante para PIX)
+        try {
+          const userRow = await pool.query('SELECT email, name FROM users WHERE id = $1', [userId]);
+          if (userRow.rows.length > 0 && generatedCodes.length > 0) {
+            sendAccessCodesEmail(userRow.rows[0].email, userRow.rows[0].name, generatedCodes).catch(() => {});
+          }
+        } catch (emailErr) {
+          console.warn('⚠️ Erro ao enviar email de códigos no webhook:', emailErr.message);
         }
 
         console.log(`✅ ${totalItems} código(s) gerado(s) para order ${order.id}`);

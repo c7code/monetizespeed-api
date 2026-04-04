@@ -96,9 +96,10 @@ router.get('/status', authenticateToken, async (req, res) => {
 
 router.post('/subscribe', authenticateToken, async (req, res) => {
   try {
-    const { card, document, name, phone, billing_address } = req.body;
+    const { card, document, name, phone, billing_address, payment_method } = req.body;
+    const isPix = payment_method === 'pix';
 
-    if (!card || !card.number) {
+    if (!isPix && (!card || !card.number)) {
       return res.status(400).json({ error: 'Dados do cartão são obrigatórios' });
     }
 
@@ -108,7 +109,7 @@ router.post('/subscribe', authenticateToken, async (req, res) => {
 
     const pool = getPool();
 
-    // Billing address (obrigatório pelo Pagar.me)
+    // Billing address (obrigatório para cartão)
     const billingAddress = billing_address || {
       line_1: '375, Av General Justo, Centro',
       zip_code: '20021130',
@@ -119,8 +120,11 @@ router.post('/subscribe', authenticateToken, async (req, res) => {
 
     const cleanDocument = document.replace(/\D/g, '');
 
-    // Tokenizar cartão no Pagar.me
-    const cardToken = await tokenizeCard(card);
+    // Tokenizar cartão apenas se for cartão de crédito
+    let cardToken = null;
+    if (!isPix) {
+      cardToken = await tokenizeCard(card);
+    }
 
     // Atualizar nome se fornecido
     if (name) {
@@ -167,12 +171,13 @@ router.post('/subscribe', authenticateToken, async (req, res) => {
       }
     }
 
-    // Criar assinatura no Pagar.me (com token + billing_address)
+    // Criar assinatura no Pagar.me
     const subscription = await createSubscription({
       customerId,
       cardToken,
       billingAddress,
       planAmount: 2990,
+      paymentMethod: isPix ? 'pix' : 'credit_card',
     });
 
     console.log('📋 Subscription response:', JSON.stringify(subscription, null, 2));
@@ -183,7 +188,7 @@ router.post('/subscribe', authenticateToken, async (req, res) => {
       subscription.charges?.[0]?.last_transaction?.status;
 
     // Salvar no banco (mesmo que pendente, para rastrear)
-    const subStatus = isApproved ? 'active' : 'failed';
+    const subStatus = isApproved ? 'active' : (isPix ? 'pending' : 'failed');
     await pool.query(
       `INSERT INTO subscriptions (user_id, pagarme_subscription_id, status, current_period_end)
        VALUES ($1, $2, $3, $4)
@@ -197,7 +202,27 @@ router.post('/subscribe', authenticateToken, async (req, res) => {
       ]
     );
 
-    // Só ativar o plano se o pagamento foi aprovado
+    // ====== FLUXO PIX ======
+    if (isPix) {
+      // Extrair dados do PIX da resposta
+      const charge = subscription.charges?.[0];
+      const pixTransaction = charge?.last_transaction;
+      const qrCode = pixTransaction?.qr_code;
+      const qrCodeUrl = pixTransaction?.qr_code_url;
+
+      return res.json({
+        message: 'PIX gerado! Escaneie o QR Code para pagar. 📱',
+        payment_method: 'pix',
+        status: 'pending',
+        subscription_id: subscription.id,
+        pix_data: {
+          qr_code: qrCode || null,
+          qr_code_url: qrCodeUrl || null,
+        },
+      });
+    }
+
+    // ====== FLUXO CARTÃO ======
     if (isApproved) {
       const expiresAt = subscription.current_cycle?.end_at || new Date(Date.now() + 30 * 24 * 60 * 60 * 1000);
       await pool.query(
@@ -205,13 +230,14 @@ router.post('/subscribe', authenticateToken, async (req, res) => {
         [expiresAt, req.user.userId]
       );
 
-      // Enviar email de confirmação (em background, não bloqueia a resposta)
+      // Enviar email de confirmação (em background)
       const userEmail = user.email;
       const userName = name || user.name;
       sendSubscriptionConfirmEmail(userEmail, userName, expiresAt).catch(() => {});
 
       res.json({
         message: 'Assinatura criada com sucesso! 🎉',
+        payment_method: 'credit_card',
         subscription: {
           id: subscription.id,
           status: subscription.status,
@@ -220,8 +246,6 @@ router.post('/subscribe', authenticateToken, async (req, res) => {
         plan_expires_at: expiresAt,
       });
     } else {
-      // Pagamento NÃO aprovado — não liberar acesso
-      // Tentar cancelar a assinatura pendente no Pagar.me
       try {
         await cancelSubscription(subscription.id);
       } catch (e) {
@@ -284,9 +308,10 @@ router.post('/cancel-subscription', authenticateToken, async (req, res) => {
 
 router.post('/buy-access-codes', authenticateToken, async (req, res) => {
   try {
-    const { card, document, name, quantity, phone, billing_address } = req.body;
+    const { card, document, name, quantity, phone, billing_address, payment_method } = req.body;
+    const isPix = payment_method === 'pix';
 
-    if (!card || !card.number) {
+    if (!isPix && (!card || !card.number)) {
       return res.status(400).json({ error: 'Dados do cartão são obrigatórios' });
     }
 
@@ -301,7 +326,7 @@ router.post('/buy-access-codes', authenticateToken, async (req, res) => {
 
     const pool = getPool();
 
-    // Billing address (obrigatório pelo Pagar.me)
+    // Billing address (para cartão)
     const billingAddress = billing_address || {
       line_1: '375, Av General Justo, Centro',
       zip_code: '20021130',
@@ -312,8 +337,11 @@ router.post('/buy-access-codes', authenticateToken, async (req, res) => {
 
     const cleanDocument = document.replace(/\D/g, '');
 
-    // Tokenizar cartão
-    const cardToken = await tokenizeCard(card);
+    // Tokenizar cartão apenas se for cartão
+    let cardToken = null;
+    if (!isPix) {
+      cardToken = await tokenizeCard(card);
+    }
 
     if (name) {
       await pool.query('UPDATE users SET name = $1 WHERE id = $2', [name, req.user.userId]);
@@ -335,16 +363,39 @@ router.post('/buy-access-codes', authenticateToken, async (req, res) => {
     const customerId = customer.id;
     await pool.query('UPDATE users SET pagarme_customer_id = $1 WHERE id = $2', [customerId, req.user.userId]);
 
-    // Criar order no Pagar.me (com token + billing_address)
+    // Criar order no Pagar.me
     const order = await createOrder({
       customerId,
       cardToken,
       billingAddress,
       quantity: qty,
       unitPrice: 2990,
+      paymentMethod: isPix ? 'pix' : 'credit_card',
     });
 
-    // Se o pagamento foi aprovado, gerar os códigos
+    console.log('📋 Order response:', JSON.stringify(order, null, 2));
+
+    // ====== FLUXO PIX ======
+    if (isPix) {
+      // Extrair dados do PIX
+      const charge = order.charges?.[0];
+      const pixTransaction = charge?.last_transaction;
+      const qrCode = pixTransaction?.qr_code;
+      const qrCodeUrl = pixTransaction?.qr_code_url;
+
+      return res.json({
+        message: 'PIX gerado! Escaneie o QR Code para pagar. Seus códigos serão gerados automaticamente após a confirmação. 📱',
+        payment_method: 'pix',
+        status: 'pending',
+        order_id: order.id,
+        pix_data: {
+          qr_code: qrCode || null,
+          qr_code_url: qrCodeUrl || null,
+        },
+      });
+    }
+
+    // ====== FLUXO CARTÃO ======
     const isPaid = order.status === 'paid' ||
       order.charges?.some(c => c.status === 'paid' || c.last_transaction?.status === 'captured');
 
@@ -376,13 +427,14 @@ router.post('/buy-access-codes', authenticateToken, async (req, res) => {
       });
     }
 
-    // Enviar códigos por email (em background, não bloqueia a resposta)
+    // Enviar códigos por email
     const userEmail = user.email;
     const userName = name || user.name;
     sendAccessCodesEmail(userEmail, userName, codes).catch(() => {});
 
     res.json({
       message: `${qty} código(s) de acesso gerado(s) com sucesso! 🎟️ Enviamos os códigos para seu email.`,
+      payment_method: 'credit_card',
       order_id: order.id,
       order_status: order.status,
       codes,
