@@ -171,24 +171,62 @@ router.post('/subscribe', authenticateToken, async (req, res) => {
       }
     }
 
-    // Criar assinatura no Pagar.me
+    // ====== FLUXO PIX (usa Order, pois Subscriptions não suportam PIX) ======
+    if (isPix) {
+      const order = await createOrder({
+        customerId,
+        cardToken: null,
+        billingAddress: null,
+        quantity: 1,
+        unitPrice: 199,
+        paymentMethod: 'pix',
+      });
+
+      console.log('📋 PIX Order response:', JSON.stringify(order, null, 2));
+
+      // Extrair dados do PIX
+      const charge = order.charges?.[0];
+      const pixTransaction = charge?.last_transaction;
+      const qrCode = pixTransaction?.qr_code;
+      const qrCodeUrl = pixTransaction?.qr_code_url;
+
+      // Salvar order como "assinatura PIX pendente" para o webhook ativar
+      await pool.query(
+        `INSERT INTO subscriptions (user_id, pagarme_subscription_id, status, current_period_end)
+         VALUES ($1, $2, 'pending', NULL)
+         ON CONFLICT (pagarme_subscription_id) DO UPDATE 
+         SET status = 'pending', updated_at = NOW()`,
+        [req.user.userId, order.id]
+      );
+
+      return res.json({
+        message: 'PIX gerado! Escaneie o QR Code para pagar. 📱',
+        payment_method: 'pix',
+        status: 'pending',
+        order_id: order.id,
+        pix_data: {
+          qr_code: qrCode || null,
+          qr_code_url: qrCodeUrl || null,
+        },
+      });
+    }
+
+    // ====== FLUXO CARTÃO (usa Subscription) ======
     const subscription = await createSubscription({
       customerId,
       cardToken,
       billingAddress,
-      planAmount: 2990,
-      paymentMethod: isPix ? 'pix' : 'credit_card',
+      planAmount: 199,
+      paymentMethod: 'credit_card',
     });
 
     console.log('📋 Subscription response:', JSON.stringify(subscription, null, 2));
 
-    // Verificar se a primeira cobrança foi aprovada
     const isApproved = subscription.status === 'active';
     const chargeStatus = subscription.current_cycle?.cycle?.status ||
       subscription.charges?.[0]?.last_transaction?.status;
 
-    // Salvar no banco (mesmo que pendente, para rastrear)
-    const subStatus = isApproved ? 'active' : (isPix ? 'pending' : 'failed');
+    const subStatus = isApproved ? 'active' : 'failed';
     await pool.query(
       `INSERT INTO subscriptions (user_id, pagarme_subscription_id, status, current_period_end)
        VALUES ($1, $2, $3, $4)
@@ -202,27 +240,6 @@ router.post('/subscribe', authenticateToken, async (req, res) => {
       ]
     );
 
-    // ====== FLUXO PIX ======
-    if (isPix) {
-      // Extrair dados do PIX da resposta
-      const charge = subscription.charges?.[0];
-      const pixTransaction = charge?.last_transaction;
-      const qrCode = pixTransaction?.qr_code;
-      const qrCodeUrl = pixTransaction?.qr_code_url;
-
-      return res.json({
-        message: 'PIX gerado! Escaneie o QR Code para pagar. 📱',
-        payment_method: 'pix',
-        status: 'pending',
-        subscription_id: subscription.id,
-        pix_data: {
-          qr_code: qrCode || null,
-          qr_code_url: qrCodeUrl || null,
-        },
-      });
-    }
-
-    // ====== FLUXO CARTÃO ======
     if (isApproved) {
       const expiresAt = subscription.current_cycle?.end_at || new Date(Date.now() + 30 * 24 * 60 * 60 * 1000);
       await pool.query(
@@ -230,7 +247,6 @@ router.post('/subscribe', authenticateToken, async (req, res) => {
         [expiresAt, req.user.userId]
       );
 
-      // Enviar email de confirmação (em background)
       const userEmail = user.email;
       const userName = name || user.name;
       sendSubscriptionConfirmEmail(userEmail, userName, expiresAt).catch(() => {});
@@ -369,7 +385,7 @@ router.post('/buy-access-codes', authenticateToken, async (req, res) => {
       cardToken,
       billingAddress,
       quantity: qty,
-      unitPrice: 2990,
+      unitPrice: 199,
       paymentMethod: isPix ? 'pix' : 'credit_card',
     });
 

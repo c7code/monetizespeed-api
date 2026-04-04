@@ -161,24 +161,10 @@ router.post('/', async (req, res) => {
         break;
       }
 
-      // ====== ORDER EVENTS (compra de códigos de acesso) ======
+      // ====== ORDER EVENTS (compra de códigos ou assinatura PIX) ======
       case 'order.paid': {
         const order = event.data;
         if (!order?.id) break;
-
-        // Verificar se já foram gerados códigos para este order
-        const existingCodes = await pool.query(
-          'SELECT id FROM access_codes WHERE order_id = $1',
-          [order.id]
-        );
-
-        if (existingCodes.rows.length > 0) {
-          console.log('⚠️ Códigos já gerados para order', order.id);
-          break;
-        }
-
-        // Buscar quantidade do pedido
-        const totalItems = order.items?.reduce((sum, item) => sum + (item.quantity || 1), 0) || 1;
 
         // Buscar user pelo customer_id do Pagar.me
         const userResult = await pool.query(
@@ -192,6 +178,54 @@ router.post('/', async (req, res) => {
         }
 
         const userId = userResult.rows[0].id;
+
+        // Verificar se é uma "assinatura PIX" (order salvo na tabela subscriptions)
+        const pixSubCheck = await pool.query(
+          `SELECT id FROM subscriptions WHERE pagarme_subscription_id = $1 AND status = 'pending'`,
+          [order.id]
+        );
+
+        if (pixSubCheck.rows.length > 0) {
+          // É uma assinatura PIX — ativar plano por 30 dias
+          const newExpires = new Date(Date.now() + 30 * 24 * 60 * 60 * 1000);
+          await pool.query(
+            `UPDATE users SET plan_status = 'active', plan_expires_at = $1 WHERE id = $2`,
+            [newExpires, userId]
+          );
+          await pool.query(
+            `UPDATE subscriptions SET status = 'active', current_period_end = $1, updated_at = NOW()
+             WHERE pagarme_subscription_id = $2`,
+            [newExpires, order.id]
+          );
+
+          // Enviar email de confirmação
+          try {
+            const userRow = await pool.query('SELECT email, name FROM users WHERE id = $1', [userId]);
+            if (userRow.rows.length > 0) {
+              sendSubscriptionConfirmEmail(userRow.rows[0].email, userRow.rows[0].name, newExpires).catch(() => {});
+            }
+          } catch (emailErr) {
+            console.warn('⚠️ Erro ao enviar email de assinatura PIX:', emailErr.message);
+          }
+
+          console.log(`✅ Assinatura PIX ativada para user ${userId}, order ${order.id}`);
+          break;
+        }
+
+        // Não é assinatura PIX — é compra de códigos
+        // Verificar se já foram gerados códigos para este order
+        const existingCodes = await pool.query(
+          'SELECT id FROM access_codes WHERE order_id = $1',
+          [order.id]
+        );
+
+        if (existingCodes.rows.length > 0) {
+          console.log('⚠️ Códigos já gerados para order', order.id);
+          break;
+        }
+
+        // Buscar quantidade do pedido
+        const totalItems = order.items?.reduce((sum, item) => sum + (item.quantity || 1), 0) || 1;
 
         // Gerar códigos
         const generatedCodes = [];
@@ -212,7 +246,7 @@ router.post('/', async (req, res) => {
           generatedCodes.push(code);
         }
 
-        // Enviar codes por email (importante para PIX)
+        // Enviar codes por email
         try {
           const userRow = await pool.query('SELECT email, name FROM users WHERE id = $1', [userId]);
           if (userRow.rows.length > 0 && generatedCodes.length > 0) {

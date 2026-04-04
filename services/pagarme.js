@@ -134,7 +134,7 @@ export async function getCustomer(customerId) {
 
 // ====== SUBSCRIPTIONS ======
 
-export async function createSubscription({ customerId, cardToken, billingAddress, planAmount = 2990, paymentMethod = 'credit_card' }) {
+export async function createSubscription({ customerId, cardToken, billingAddress, planAmount = 199, paymentMethod = 'credit_card' }) {
   const payload = {
     payment_method: paymentMethod,
     interval: 'month',
@@ -192,7 +192,7 @@ export async function getSubscription(subscriptionId) {
 
 // ====== ORDERS (para compra de múltiplos acessos) ======
 
-export async function createOrder({ customerId, cardToken, billingAddress, quantity, unitPrice = 2990, paymentMethod = 'credit_card' }) {
+export async function createOrder({ customerId, cardToken, billingAddress, quantity, unitPrice = 199, paymentMethod = 'credit_card' }) {
   const totalAmount = quantity * unitPrice;
 
   // Montar payment conforme o método escolhido
