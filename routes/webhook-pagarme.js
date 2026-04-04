@@ -106,14 +106,17 @@ router.post('/', async (req, res) => {
         break;
       }
 
-      // ====== CHARGE/INVOICE EVENTS (renovação de assinatura) ======
+      // ====== CHARGE/INVOICE EVENTS ======
       case 'charge.paid':
       case 'invoice.paid': {
         const data = event.data;
         const subscriptionId = data.subscription_id || data.subscription?.id;
+        const orderId = data.order_id || data.order?.id;
+
+        console.log(`📋 charge.paid — subscriptionId: ${subscriptionId}, orderId: ${orderId}`);
 
         if (subscriptionId) {
-          // Renovação/pagamento de assinatura (inclui PIX)
+          // Renovação/pagamento de assinatura por cartão
           const subRow = await pool.query(
             'SELECT user_id FROM subscriptions WHERE pagarme_subscription_id = $1',
             [subscriptionId]
@@ -132,7 +135,6 @@ router.post('/', async (req, res) => {
               [newExpires, subscriptionId]
             );
 
-            // Enviar email de confirmação (especialmente importante para PIX)
             try {
               const userRow = await pool.query('SELECT email, name FROM users WHERE id = $1', [userId]);
               if (userRow.rows.length > 0) {
@@ -140,6 +142,69 @@ router.post('/', async (req, res) => {
               }
             } catch (emailErr) {
               console.warn('⚠️ Erro ao enviar email no webhook:', emailErr.message);
+            }
+          }
+        } else if (orderId) {
+          // PIX pago para um Order — verificar se é assinatura PIX ou compra de códigos
+          console.log(`📋 charge.paid para order ${orderId} — verificando se é assinatura PIX...`);
+
+          // Buscar user pelo customer_id
+          const customerId = data.customer?.id;
+          let userId = null;
+          if (customerId) {
+            const userRes = await pool.query('SELECT id FROM users WHERE pagarme_customer_id = $1', [customerId]);
+            if (userRes.rows.length > 0) userId = userRes.rows[0].id;
+          }
+
+          // Verificar se é "assinatura PIX" pendente
+          const pixSubCheck = await pool.query(
+            `SELECT id, user_id FROM subscriptions WHERE pagarme_subscription_id = $1 AND status = 'pending'`,
+            [orderId]
+          );
+
+          if (pixSubCheck.rows.length > 0) {
+            const subUserId = pixSubCheck.rows[0].user_id;
+            const newExpires = new Date(Date.now() + 30 * 24 * 60 * 60 * 1000);
+            await pool.query(
+              `UPDATE users SET plan_status = 'active', plan_expires_at = $1 WHERE id = $2`,
+              [newExpires, subUserId]
+            );
+            await pool.query(
+              `UPDATE subscriptions SET status = 'active', current_period_end = $1, updated_at = NOW()
+               WHERE pagarme_subscription_id = $2`,
+              [newExpires, orderId]
+            );
+
+            try {
+              const userRow = await pool.query('SELECT email, name FROM users WHERE id = $1', [subUserId]);
+              if (userRow.rows.length > 0) {
+                sendSubscriptionConfirmEmail(userRow.rows[0].email, userRow.rows[0].name, newExpires).catch(() => {});
+              }
+            } catch (emailErr) {
+              console.warn('⚠️ Erro ao enviar email de assinatura PIX:', emailErr.message);
+            }
+            console.log(`✅ Assinatura PIX ativada via charge.paid para order ${orderId}`);
+          } else if (userId) {
+            // Compra de códigos via PIX — gerar códigos
+            const existingCodes = await pool.query('SELECT id FROM access_codes WHERE order_id = $1', [orderId]);
+            if (existingCodes.rows.length === 0) {
+              // Precisamos saber a quantidade — buscar do order via API ou assumir 1
+              console.log(`📋 Gerando códigos para order PIX ${orderId}...`);
+              const code = generateAccessCode();
+              await pool.query(
+                `INSERT INTO access_codes (code, purchaser_user_id, order_id, status, duration_days)
+                 VALUES ($1, $2, $3, 'active', 30)`,
+                [code, userId, orderId]
+              );
+              try {
+                const userRow = await pool.query('SELECT email, name FROM users WHERE id = $1', [userId]);
+                if (userRow.rows.length > 0) {
+                  sendAccessCodesEmail(userRow.rows[0].email, userRow.rows[0].name, [code]).catch(() => {});
+                }
+              } catch (emailErr) {
+                console.warn('⚠️ Erro email:', emailErr.message);
+              }
+              console.log(`✅ Código gerado via charge.paid para order ${orderId}`);
             }
           }
         }
@@ -261,7 +326,7 @@ router.post('/', async (req, res) => {
       }
 
       default:
-        console.log(`ℹ️ Evento não tratado: ${event.type}`);
+        console.log(`ℹ️ Evento não tratado: ${event.type}`, JSON.stringify(event.data, null, 2).substring(0, 500));
     }
   } catch (error) {
     console.error('❌ Erro no webhook Pagar.me:', error);
