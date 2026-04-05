@@ -457,6 +457,17 @@ export async function initDatabase() {
       )
     `);
 
+    await dbPool.query(`
+      CREATE TABLE IF NOT EXISTS categories (
+        id SERIAL PRIMARY KEY,
+        user_id INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+        name VARCHAR(100) NOT NULL,
+        type VARCHAR(20) DEFAULT 'both' CHECK (type IN ('expense', 'income', 'both')),
+        created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+        UNIQUE(user_id, name)
+      )
+    `);
+
     console.log('✅ Tabelas criadas/verificadas com sucesso');
   } catch (error) {
     console.error('❌ Erro ao criar tabelas:', error);
