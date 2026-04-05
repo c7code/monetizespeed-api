@@ -23,16 +23,28 @@ function getOpenAI() {
 const SYSTEM_PROMPT = `Você é um assistente financeiro da plataforma Tudo no Azul. Analise o texto do usuário e identifique a intenção. Retorne no formato JSON.
 
 Intenções possíveis:
-1. 'register': O usuário está informando um novo gasto ou ganho.
+1. 'register': O usuário está informando um gasto, ganho, conta a pagar ou conta a receber.
 2. 'query': O usuário está perguntando sobre seus gastos, ganhos ou saldo (ex: "quanto gastei com X?", "qual meu saldo?").
 
 Se a intenção for 'register', extraia os campos:
 - intent: 'register'
 - type: 'income' ou 'expense'
+- destination: Onde registrar. Use uma destas opções:
+  - 'transaction': gasto ou receita JÁ REALIZADA (ex: "gastei", "paguei", "recebi", "comprei"). Algo que já aconteceu.
+  - 'bill': conta a pagar FUTURA, algo que ainda não foi pago (ex: "tenho que pagar", "conta de luz vence dia 15", "boleto de 200 reais pra dia 10", "preciso pagar", "vou pagar dia X"). Uma obrigação financeira futura.
+  - 'receivable': conta a receber FUTURA, algo que ainda não foi recebido (ex: "fulano me deve", "vou receber", "tenho a receber", "cliente vai pagar"). Um valor que alguém deve ao usuário.
 - category: Uma das seguintes: 'Alimentação', 'Moradia', 'Transporte', 'Saúde', 'Educação', 'Lazer', 'Mercado', 'Contas', 'Outros', 'Salário', 'Investimentos', 'Vendas', 'Freela'. Se não se encaixar perfeitamente, use 'Outros'.
 - amount: valor numérico (number). Se houver múltiplos itens, use o valor total.
-- date: data no formato YYYY-MM-DD. Se o usuário disser "hoje", use a data atual. Se não disser data, use a data atual.
-- description: breve descrição do gasto/ganho.
+- date: data no formato YYYY-MM-DD. Para 'transaction', use a data do evento (default: hoje). Para 'bill' e 'receivable', use a data de VENCIMENTO mencionada (default: hoje).
+- description: breve descrição do gasto/ganho/conta.
+- supplier_name: (apenas para 'bill') nome do fornecedor se mencionado, senão null.
+- customer_name: (apenas para 'receivable') nome do cliente/devedor se mencionado, senão null.
+
+DICAS para decidir o destination:
+- Verbos no passado (gastei, paguei, comprei, recebi) → 'transaction'
+- Verbos no futuro ou obrigação (tenho que pagar, vence, preciso pagar, vai vencer) → 'bill'
+- Alguém deve ao usuário (me deve, vou receber de, fulano vai pagar) → 'receivable'
+- Se não for claro, use 'transaction' como padrão.
 
 Se a intenção for 'query', extraia:
 - intent: 'query'
@@ -41,7 +53,7 @@ Se a intenção for 'query', extraia:
 - category_filter: se a pergunta focar numa categoria específica, coloque o nome dela aqui (ex: 'Alimentação'), senão null.
 
 Se nenhuma das duas for aplicável, retorne:
-{ "error": "Não entendi sua mensagem. Você quer registrar um gasto ou perguntar sobre suas transações?" }
+{ "error": "Não entendi sua mensagem. Você pode registrar gastos, contas a pagar/receber, ou perguntar sobre suas finanças." }
 
 Retorne APENAS o JSON, sem markdown ou explicações adicionais.`;
 
@@ -141,8 +153,75 @@ async function createTransaction(userId, data) {
     return result.rows[0];
 }
 
+// Criar conta a pagar no banco
+async function createBill(userId, data) {
+    const pool = getPool();
+    const result = await pool.query(
+        `INSERT INTO bills (user_id, description, amount, due_date, status, category, supplier_name)
+     VALUES ($1, $2, $3, $4, 'pending', $5, $6)
+     RETURNING *`,
+        [
+            userId,
+            data.description,
+            data.amount,
+            data.date || new Date().toISOString().split('T')[0],
+            data.category || 'Outros',
+            data.supplier_name || null
+        ]
+    );
+    return result.rows[0];
+}
+
+// Criar conta a receber no banco
+async function createReceivable(userId, data) {
+    const pool = getPool();
+    const result = await pool.query(
+        `INSERT INTO receivables (user_id, description, amount, due_date, status, category, customer_name)
+     VALUES ($1, $2, $3, $4, 'pending', $5, $6)
+     RETURNING *`,
+        [
+            userId,
+            data.description,
+            data.amount,
+            data.date || new Date().toISOString().split('T')[0],
+            data.category || 'Outros',
+            data.customer_name || null
+        ]
+    );
+    return result.rows[0];
+}
+
 // Formatar mensagem de confirmação
-function formatConfirmation(data, transaction) {
+function formatConfirmation(data, record) {
+    const destination = data.destination || 'transaction';
+
+    if (destination === 'bill') {
+        return (
+            `✅ Conta a Pagar registrada!\n\n` +
+            `📋 Descrição: ${data.description}\n` +
+            `💰 Valor: R$ ${Number(data.amount).toFixed(2)}\n` +
+            `📅 Vencimento: ${data.date || new Date().toISOString().split('T')[0]}\n` +
+            `📂 Categoria: ${data.category}\n` +
+            (data.supplier_name ? `🏢 Fornecedor: ${data.supplier_name}\n` : '') +
+            `\n📌 Status: Pendente\n` +
+            `Acesse o app para marcar como paga quando efetuar o pagamento.`
+        );
+    }
+
+    if (destination === 'receivable') {
+        return (
+            `✅ Conta a Receber registrada!\n\n` +
+            `📋 Descrição: ${data.description}\n` +
+            `💰 Valor: R$ ${Number(data.amount).toFixed(2)}\n` +
+            `📅 Vencimento: ${data.date || new Date().toISOString().split('T')[0]}\n` +
+            `📂 Categoria: ${data.category}\n` +
+            (data.customer_name ? `👤 Cliente: ${data.customer_name}\n` : '') +
+            `\n📌 Status: Pendente\n` +
+            `Acesse o app para marcar como recebida quando o valor entrar.`
+        );
+    }
+
+    // transaction (default)
     const typeEmoji = data.type === 'expense' ? '📉' : '📈';
     const typeLabel = data.type === 'expense' ? 'Despesa' : 'Receita';
     return (
@@ -303,15 +382,20 @@ async function handleImageMessage(mediaUrl, contentType) {
                 role: 'system',
                 content: `Você é um assistente financeiro especialista em analisar imagens de recibos, notas fiscais, cupons, comprovantes, boletos e fotos de produtos/serviços.
 
-Analise a imagem enviada e identifique se o usuário quer registrar uma transação ou se está apenas perguntando sobre algo (embora com foto seja quase sempre registro). Se for um comprovante ou recibo, assuma 'register'.
-
-Retorne no formato JSON com:
+Analise a imagem enviada e identifique o tipo de registro financeiro. Retorne no formato JSON com:
 - intent: 'register'
 - type: 'income' ou 'expense' (na maioria dos casos será 'expense' para recibos e compras)
+- destination: Onde registrar:
+  - 'transaction': se for um COMPROVANTE DE PAGAMENTO já realizado (recibo, cupom fiscal, comprovante PIX enviado)
+  - 'bill': se for um BOLETO, FATURA ou conta a pagar que AINDA NÃO FOI PAGA
+  - 'receivable': se for um comprovante de venda ou valor a receber
+  - Na dúvida, use 'transaction'.
 - category: Uma das seguintes: 'Alimentação', 'Moradia', 'Transporte', 'Saúde', 'Educação', 'Lazer', 'Mercado', 'Contas', 'Outros', 'Salário', 'Investimentos', 'Vendas', 'Freela'. Se não se encaixar perfeitamente, use 'Outros' ou a mais próxima.
 - amount: valor numérico total (number). Se houver múltiplos itens, use o valor TOTAL.
-- date: data no formato YYYY-MM-DD. Se visível no recibo, use essa data. Caso contrário, use a data atual.
-- description: breve descrição do gasto/ganho baseado no conteúdo da imagem.
+- date: data no formato YYYY-MM-DD. Para boletos/faturas, use a data de VENCIMENTO. Para comprovantes, use a data do pagamento. Caso contrário, use a data atual.
+- description: breve descrição baseada no conteúdo da imagem.
+- supplier_name: (para 'bill') nome do fornecedor/empresa se visível, senão null.
+- customer_name: (para 'receivable') nome do cliente se visível, senão null.
 
 Se não for possível identificar uma transação financeira na imagem, retorne:
 { "error": "Não foi possível identificar uma transação financeira nesta imagem." }
@@ -420,19 +504,31 @@ router.post('/whatsapp/inbound', async (req, res) => {
         if (!transactionData.amount || transactionData.amount <= 0) {
             res.type('text/xml');
             return res.send(twimlResponse(
-                '⚠️ Não consegui identificar o valor da transação.\n\n' +
+                '⚠️ Não consegui identificar o valor.\n\n' +
                 'Tente novamente com mais detalhes, ex:\n' +
                 '"Gastei 50 reais no almoço"\n' +
-                '"Recebi 2000 de salário"'
+                '"Tenho uma conta de 200 pra pagar dia 15"\n' +
+                '"João me deve 500 reais"'
             ));
         }
 
-        // Criar transação
-        const transaction = await createTransaction(user.id, transactionData);
-        console.log('✅ Transação criada via WhatsApp:', transaction.id);
+        // Rotear para o destino correto
+        const destination = transactionData.destination || 'transaction';
+        let record;
+
+        if (destination === 'bill') {
+            record = await createBill(user.id, transactionData);
+            console.log('✅ Conta a Pagar criada via WhatsApp:', record.id);
+        } else if (destination === 'receivable') {
+            record = await createReceivable(user.id, transactionData);
+            console.log('✅ Conta a Receber criada via WhatsApp:', record.id);
+        } else {
+            record = await createTransaction(user.id, transactionData);
+            console.log('✅ Transação criada via WhatsApp:', record.id);
+        }
 
         // Responder com confirmação
-        const confirmation = extraInfo + formatConfirmation(transactionData, transaction);
+        const confirmation = extraInfo + formatConfirmation(transactionData, record);
         res.type('text/xml');
         return res.send(twimlResponse(confirmation));
 
