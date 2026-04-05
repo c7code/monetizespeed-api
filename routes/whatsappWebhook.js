@@ -271,7 +271,7 @@ async function answerFinancialQueryWithAI(question, transactions) {
         : "Nenhuma transação encontrada para este período/filtro.";
 
     const completion = await ai.chat.completions.create({
-        model: 'gpt-4o',
+        model: 'gpt-4o-mini',
         messages: [
             { 
                 role: 'system', 
@@ -298,7 +298,7 @@ async function handleTextMessage(messageBody) {
     if (!ai) throw new Error('OpenAI não configurada');
 
     const completion = await ai.chat.completions.create({
-        model: 'gpt-4o',
+        model: 'gpt-4o-mini',
         messages: [
             { role: 'system', content: SYSTEM_PROMPT },
             { role: 'user', content: `Data atual: ${new Date().toISOString().split('T')[0]}. Texto: "${messageBody}"` }
@@ -350,7 +350,7 @@ async function handleAudioMessage(mediaUrl) {
 
         // 2. Extrair dados com GPT-4o
         const completion = await ai.chat.completions.create({
-            model: 'gpt-4o',
+            model: 'gpt-4o-mini',
             messages: [
                 { role: 'system', content: SYSTEM_PROMPT },
                 { role: 'user', content: `Data atual: ${new Date().toISOString().split('T')[0]}. Texto transcrito de áudio: "${text}"` }
@@ -376,7 +376,7 @@ async function handleImageMessage(mediaUrl, contentType) {
     const mimeType = contentType || 'image/jpeg';
 
     const completion = await ai.chat.completions.create({
-        model: 'gpt-4o',
+        model: 'gpt-4o-mini',
         messages: [
             {
                 role: 'system',
