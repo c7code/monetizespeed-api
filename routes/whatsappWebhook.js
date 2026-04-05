@@ -194,6 +194,7 @@ async function createReceivable(userId, data) {
 // Formatar mensagem de confirmação
 function formatConfirmation(data, record) {
     const destination = data.destination || 'transaction';
+    const baseUrl = 'https://www.tudonoazul.com.br/app';
 
     if (destination === 'bill') {
         return (
@@ -204,7 +205,8 @@ function formatConfirmation(data, record) {
             `📂 Categoria: ${data.category}\n` +
             (data.supplier_name ? `🏢 Fornecedor: ${data.supplier_name}\n` : '') +
             `\n📌 Status: Pendente\n` +
-            `Acesse o app para marcar como paga quando efetuar o pagamento.`
+            `Acesse o app para marcar como paga quando efetuar o pagamento.\n` +
+            `🔗 Ver no app: ${baseUrl}/bills`
         );
     }
 
@@ -217,7 +219,8 @@ function formatConfirmation(data, record) {
             `📂 Categoria: ${data.category}\n` +
             (data.customer_name ? `👤 Cliente: ${data.customer_name}\n` : '') +
             `\n📌 Status: Pendente\n` +
-            `Acesse o app para marcar como recebida quando o valor entrar.`
+            `Acesse o app para marcar como recebida quando o valor entrar.\n` +
+            `🔗 Ver no app: ${baseUrl}/receivables`
         );
     }
 
@@ -230,7 +233,8 @@ function formatConfirmation(data, record) {
         `💰 Valor: R$ ${Number(data.amount).toFixed(2)}\n` +
         `📂 Categoria: ${data.category}\n` +
         `📝 Descrição: ${data.description}\n` +
-        `📅 Data: ${data.date || new Date().toISOString().split('T')[0]}`
+        `📅 Data: ${data.date || new Date().toISOString().split('T')[0]}\n\n` +
+        `🔗 Ver no app: ${baseUrl}/transactions`
     );
 }
 
