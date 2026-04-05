@@ -178,7 +178,7 @@ router.post('/subscribe', authenticateToken, async (req, res) => {
         cardToken: null,
         billingAddress: null,
         quantity: 1,
-        unitPrice: 199,
+        unitPrice: 2990,
         paymentMethod: 'pix',
       });
 
@@ -216,7 +216,7 @@ router.post('/subscribe', authenticateToken, async (req, res) => {
       customerId,
       cardToken,
       billingAddress,
-      planAmount: 199,
+      planAmount: 2990,
       paymentMethod: 'credit_card',
     });
 
@@ -385,7 +385,7 @@ router.post('/buy-access-codes', authenticateToken, async (req, res) => {
       cardToken,
       billingAddress,
       quantity: qty,
-      unitPrice: 199,
+      unitPrice: 2990,
       paymentMethod: isPix ? 'pix' : 'credit_card',
     });
 
