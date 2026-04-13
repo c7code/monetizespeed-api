@@ -19,8 +19,51 @@ function getOpenAI() {
     return openai;
 }
 
-// Prompt do sistema para extração de transações ou perguntas
-const SYSTEM_PROMPT = `Você é um assistente financeiro da plataforma Tudo no Azul. Analise o texto do usuário e identifique a intenção. Retorne no formato JSON.
+// Categorias padrão do sistema
+const DEFAULT_CATEGORIES = ['Alimentação', 'Moradia', 'Transporte', 'Saúde', 'Educação', 'Lazer', 'Mercado', 'Contas', 'Salário', 'Investimentos', 'Vendas', 'Freela'];
+
+// Buscar categorias customizadas do usuário no banco
+async function getUserCategories(userId) {
+    const pool = getPool();
+    try {
+        const result = await pool.query(
+            'SELECT name, type FROM categories WHERE user_id = $1 ORDER BY name',
+            [userId]
+        );
+        return result.rows;
+    } catch (error) {
+        console.error('⚠️ Erro ao buscar categorias do usuário:', error.message);
+        return [];
+    }
+}
+
+// Montar a lista de categorias incluindo as do usuário
+function buildCategoryList(userCategories) {
+    const allCategoryNames = [...DEFAULT_CATEGORIES];
+    for (const cat of userCategories) {
+        if (!allCategoryNames.some(c => c.toLowerCase() === cat.name.toLowerCase())) {
+            allCategoryNames.push(cat.name);
+        }
+    }
+    // 'Outros' sempre por último como fallback
+    allCategoryNames.push('Outros');
+    return allCategoryNames;
+}
+
+// Prompt do sistema para extração de transações ou perguntas (dinâmico por usuário)
+function buildSystemPrompt(userCategories) {
+    const categoryList = buildCategoryList(userCategories);
+    const categoryString = categoryList.map(c => `'${c}'`).join(', ');
+
+    // Destacar as categorias personalizadas para a IA dar prioridade
+    const customCats = userCategories.filter(
+        cat => !DEFAULT_CATEGORIES.some(d => d.toLowerCase() === cat.name.toLowerCase()) && cat.name.toLowerCase() !== 'outros'
+    );
+    const customCatHint = customCats.length > 0
+        ? `\n\nATENÇÃO: O usuário criou categorias personalizadas: ${customCats.map(c => `'${c.name}'`).join(', ')}. Dê PRIORIDADE a essas categorias antes de usar 'Outros'. Só use 'Outros' se realmente nenhuma outra categoria se encaixar.`
+        : '';
+
+    return `Você é um assistente financeiro da plataforma Tudo no Azul. Analise o texto do usuário e identifique a intenção. Retorne no formato JSON.
 
 Intenções possíveis:
 1. 'register': O usuário está informando um gasto, ganho, conta a pagar ou conta a receber.
@@ -33,7 +76,7 @@ Se a intenção for 'register', extraia os campos:
   - 'transaction': gasto ou receita JÁ REALIZADA (ex: "gastei", "paguei", "recebi", "comprei"). Algo que já aconteceu.
   - 'bill': conta a pagar FUTURA, algo que ainda não foi pago (ex: "tenho que pagar", "conta de luz vence dia 15", "boleto de 200 reais pra dia 10", "preciso pagar", "vou pagar dia X"). Uma obrigação financeira futura.
   - 'receivable': conta a receber FUTURA, algo que ainda não foi recebido (ex: "fulano me deve", "vou receber", "tenho a receber", "cliente vai pagar"). Um valor que alguém deve ao usuário.
-- category: Uma das seguintes: 'Alimentação', 'Moradia', 'Transporte', 'Saúde', 'Educação', 'Lazer', 'Mercado', 'Contas', 'Outros', 'Salário', 'Investimentos', 'Vendas', 'Freela'. Se não se encaixar perfeitamente, use 'Outros'.
+- category: Uma das seguintes: ${categoryString}. Escolha a categoria que MELHOR se encaixa na descrição. Só use 'Outros' como ÚLTIMO recurso, quando nenhuma outra categoria se aplicar.${customCatHint}
 - amount: valor numérico (number). Se houver múltiplos itens, use o valor total.
 - date: data no formato YYYY-MM-DD. Para 'transaction', use a data do evento (default: hoje). Para 'bill' e 'receivable', use a data de VENCIMENTO mencionada (default: hoje).
 - description: breve descrição do gasto/ganho/conta.
@@ -56,6 +99,7 @@ Se nenhuma das duas for aplicável, retorne:
 { "error": "Não entendi sua mensagem. Você pode registrar gastos, contas a pagar/receber, ou perguntar sobre suas finanças." }
 
 Retorne APENAS o JSON, sem markdown ou explicações adicionais.`;
+}
 
 // Gerar resposta TwiML
 function twimlResponse(message) {
@@ -297,14 +341,16 @@ async function answerFinancialQueryWithAI(question, transactions) {
 // ==================== HANDLERS ====================
 
 // Processar mensagem de texto com GPT-4o
-async function handleTextMessage(messageBody) {
+async function handleTextMessage(messageBody, userCategories) {
     const ai = getOpenAI();
     if (!ai) throw new Error('OpenAI não configurada');
+
+    const systemPrompt = buildSystemPrompt(userCategories);
 
     const completion = await ai.chat.completions.create({
         model: 'gpt-4o-mini',
         messages: [
-            { role: 'system', content: SYSTEM_PROMPT },
+            { role: 'system', content: systemPrompt },
             { role: 'user', content: `Data atual: ${new Date().toISOString().split('T')[0]}. Texto: "${messageBody}"` }
         ],
         response_format: { type: 'json_object' }
@@ -332,7 +378,7 @@ async function downloadTwilioMedia(mediaUrl) {
 }
 
 // Processar áudio: Whisper → GPT-4o
-async function handleAudioMessage(mediaUrl) {
+async function handleAudioMessage(mediaUrl, userCategories) {
     const ai = getOpenAI();
     if (!ai) throw new Error('OpenAI não configurada');
 
@@ -340,6 +386,8 @@ async function handleAudioMessage(mediaUrl) {
     const audioBuffer = await downloadTwilioMedia(mediaUrl);
     const tmpPath = path.join('/tmp', `whatsapp_audio_${Date.now()}.ogg`);
     fs.writeFileSync(tmpPath, audioBuffer);
+
+    const systemPrompt = buildSystemPrompt(userCategories);
 
     try {
         // 1. Transcrever com Whisper
@@ -356,7 +404,7 @@ async function handleAudioMessage(mediaUrl) {
         const completion = await ai.chat.completions.create({
             model: 'gpt-4o-mini',
             messages: [
-                { role: 'system', content: SYSTEM_PROMPT },
+                { role: 'system', content: systemPrompt },
                 { role: 'user', content: `Data atual: ${new Date().toISOString().split('T')[0]}. Texto transcrito de áudio: "${text}"` }
             ],
             response_format: { type: 'json_object' }
@@ -371,13 +419,24 @@ async function handleAudioMessage(mediaUrl) {
 }
 
 // Processar imagem: GPT-4o Vision
-async function handleImageMessage(mediaUrl, contentType) {
+async function handleImageMessage(mediaUrl, contentType, userCategories) {
     const ai = getOpenAI();
     if (!ai) throw new Error('OpenAI não configurada');
 
     const imageBuffer = await downloadTwilioMedia(mediaUrl);
     const base64Image = imageBuffer.toString('base64');
     const mimeType = contentType || 'image/jpeg';
+
+    const categoryList = buildCategoryList(userCategories);
+    const categoryString = categoryList.map(c => `'${c}'`).join(', ');
+
+    // Destacar categorias personalizadas para a IA
+    const customCats = userCategories.filter(
+        cat => !DEFAULT_CATEGORIES.some(d => d.toLowerCase() === cat.name.toLowerCase()) && cat.name.toLowerCase() !== 'outros'
+    );
+    const customCatHint = customCats.length > 0
+        ? `\n\nATENÇÃO: O usuário criou categorias personalizadas: ${customCats.map(c => `'${c.name}'`).join(', ')}. Dê PRIORIDADE a essas categorias antes de usar 'Outros'. Só use 'Outros' se realmente nenhuma outra categoria se encaixar.`
+        : '';
 
     const completion = await ai.chat.completions.create({
         model: 'gpt-4o-mini',
@@ -394,7 +453,7 @@ Analise a imagem enviada e identifique o tipo de registro financeiro. Retorne no
   - 'bill': se for um BOLETO, FATURA ou conta a pagar que AINDA NÃO FOI PAGA
   - 'receivable': se for um comprovante de venda ou valor a receber
   - Na dúvida, use 'transaction'.
-- category: Uma das seguintes: 'Alimentação', 'Moradia', 'Transporte', 'Saúde', 'Educação', 'Lazer', 'Mercado', 'Contas', 'Outros', 'Salário', 'Investimentos', 'Vendas', 'Freela'. Se não se encaixar perfeitamente, use 'Outros' ou a mais próxima.
+- category: Uma das seguintes: ${categoryString}. Escolha a categoria que MELHOR se encaixa. Só use 'Outros' como ÚLTIMO recurso.${customCatHint}
 - amount: valor numérico total (number). Se houver múltiplos itens, use o valor TOTAL.
 - date: data no formato YYYY-MM-DD. Para boletos/faturas, use a data de VENCIMENTO. Para comprovantes, use a data do pagamento. Caso contrário, use a data atual.
 - description: breve descrição baseada no conteúdo da imagem.
@@ -446,6 +505,10 @@ router.post('/whatsapp/inbound', async (req, res) => {
 
         console.log(`👤 Usuário encontrado: ${user.name || user.email} (ID: ${user.id})`);
 
+        // Buscar categorias personalizadas do usuário
+        const userCategories = await getUserCategories(user.id);
+        console.log(`📂 Categorias do usuário: ${DEFAULT_CATEGORIES.length} padrão + ${userCategories.filter(c => !DEFAULT_CATEGORIES.some(d => d.toLowerCase() === c.name.toLowerCase())).length} personalizadas`);
+
         const numMedia = parseInt(NumMedia || '0', 10);
         let transactionData;
         let extraInfo = '';
@@ -457,7 +520,7 @@ router.post('/whatsapp/inbound', async (req, res) => {
             if (contentType.startsWith('audio/') || contentType.includes('ogg') || contentType.includes('opus')) {
                 // ÁUDIO
                 console.log('🎤 Processando áudio do WhatsApp...');
-                transactionData = await handleAudioMessage(MediaUrl0);
+                transactionData = await handleAudioMessage(MediaUrl0, userCategories);
                 if (transactionData._transcription) {
                     extraInfo = `🎙️ Transcrição: "${transactionData._transcription}"\n\n`;
                     delete transactionData._transcription;
@@ -465,7 +528,7 @@ router.post('/whatsapp/inbound', async (req, res) => {
             } else if (contentType.startsWith('image/')) {
                 // IMAGEM
                 console.log('📷 Processando imagem do WhatsApp...');
-                transactionData = await handleImageMessage(MediaUrl0, contentType);
+                transactionData = await handleImageMessage(MediaUrl0, contentType, userCategories);
             } else {
                 res.type('text/xml');
                 return res.send(twimlResponse(
@@ -475,7 +538,7 @@ router.post('/whatsapp/inbound', async (req, res) => {
         } else if (Body && Body.trim()) {
             // TEXTO
             console.log('💬 Processando texto do WhatsApp...');
-            transactionData = await handleTextMessage(Body.trim());
+            transactionData = await handleTextMessage(Body.trim(), userCategories);
         } else {
             res.type('text/xml');
             return res.send(twimlResponse(
