@@ -19,6 +19,8 @@ import whatsappWebhookRoutes from './routes/whatsappWebhook.js';
 import paymentsRoutes from './routes/payments.js';
 import webhookPagarmeRoutes from './routes/webhook-pagarme.js';
 import categoriesRoutes from './routes/categories.js';
+import plansRoutes from './routes/plans.js';
+import couponsRoutes from './routes/coupons.js';
 
 const app = express();
 const PORT = process.env.PORT || 3000;
@@ -116,6 +118,8 @@ app.use('/api/webhook', webhookRoutes);
 app.use('/api/user', userRoutes);
 app.use('/api/payments', paymentsRoutes);
 app.use('/api/categories', categoriesRoutes);
+app.use('/api/plans', plansRoutes);
+app.use('/api/coupons', couponsRoutes);
 app.use('/webhooks/twilio', whatsappWebhookRoutes);
 app.use('/webhooks/pagarme', webhookPagarmeRoutes);
 

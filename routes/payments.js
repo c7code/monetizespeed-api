@@ -92,11 +92,22 @@ router.get('/status', authenticateToken, async (req, res) => {
   }
 });
 
-// ====== POST /api/payments/subscribe — Criar assinatura mensal ======
+// ====== HELPER: Calcular preço com desconto ======
+function calculateDiscountedPrice(price, coupon) {
+  if (!coupon) return price;
+  if (coupon.discount_type === 'percentage') {
+    return Math.round(price * (1 - coupon.discount_value / 100));
+  } else {
+    // fixed: desconto em centavos
+    return Math.max(0, price - coupon.discount_value);
+  }
+}
+
+// ====== POST /api/payments/subscribe — Criar assinatura ======
 
 router.post('/subscribe', authenticateToken, async (req, res) => {
   try {
-    const { card, document, name, phone, billing_address, payment_method } = req.body;
+    const { card, document, name, phone, billing_address, payment_method, plan_id, coupon_code } = req.body;
     const isPix = payment_method === 'pix';
 
     if (!isPix && (!card || !card.number)) {
@@ -108,6 +119,53 @@ router.post('/subscribe', authenticateToken, async (req, res) => {
     }
 
     const pool = getPool();
+
+    // Buscar plano selecionado (ou plano mensal padrão)
+    let plan;
+    if (plan_id) {
+      const planResult = await pool.query(`SELECT * FROM plans WHERE id = $1 AND status = 'active'`, [plan_id]);
+      if (planResult.rows.length === 0) {
+        return res.status(400).json({ error: 'Plano não encontrado ou inativo' });
+      }
+      plan = planResult.rows[0];
+    } else {
+      const planResult = await pool.query(`SELECT * FROM plans WHERE status = 'active' AND billing_type = 'monthly' ORDER BY created_at ASC LIMIT 1`);
+      plan = planResult.rows[0];
+      if (!plan) {
+        return res.status(400).json({ error: 'Nenhum plano ativo encontrado' });
+      }
+    }
+
+    // Determinar preço base
+    let basePrice;
+    if (isPix) {
+      basePrice = plan.promo_price_pix || plan.price_pix;
+    } else {
+      basePrice = plan.promo_price_card || plan.price_card;
+    }
+
+    // Validar e aplicar cupom se fornecido
+    let coupon = null;
+    if (coupon_code) {
+      const couponResult = await pool.query(
+        `SELECT * FROM coupons WHERE UPPER(code) = UPPER($1) AND status = 'active'`,
+        [coupon_code]
+      );
+      if (couponResult.rows.length > 0) {
+        coupon = couponResult.rows[0];
+        // Verificar validade
+        if (coupon.valid_until && new Date(coupon.valid_until) < new Date()) {
+          coupon = null; // cupom expirado, ignorar
+        }
+        // Verificar se aplica ao tipo de plano
+        if (coupon && coupon.applies_to !== 'both' && coupon.applies_to !== plan.billing_type) {
+          coupon = null; // não aplica a este tipo
+        }
+      }
+    }
+
+    const finalPrice = calculateDiscountedPrice(basePrice, coupon);
+    console.log(`💰 Plano: ${plan.name} | Base: ${basePrice} | Final: ${finalPrice} | Cupom: ${coupon?.code || 'nenhum'}`);
 
     // Billing address (obrigatório para cartão)
     const billingAddress = billing_address || {
@@ -178,7 +236,7 @@ router.post('/subscribe', authenticateToken, async (req, res) => {
         cardToken: null,
         billingAddress: null,
         quantity: 1,
-        unitPrice: 2990,
+        unitPrice: finalPrice,
         paymentMethod: 'pix',
       });
 
@@ -192,11 +250,11 @@ router.post('/subscribe', authenticateToken, async (req, res) => {
 
       // Salvar order como "assinatura PIX pendente" para o webhook ativar
       await pool.query(
-        `INSERT INTO subscriptions (user_id, pagarme_subscription_id, status, current_period_end)
-         VALUES ($1, $2, 'pending', NULL)
+        `INSERT INTO subscriptions (user_id, pagarme_subscription_id, status, current_period_end, plan_amount)
+         VALUES ($1, $2, 'pending', NULL, $3)
          ON CONFLICT (pagarme_subscription_id) DO UPDATE 
-         SET status = 'pending', updated_at = NOW()`,
-        [req.user.userId, order.id]
+         SET status = 'pending', plan_amount = $3, updated_at = NOW()`,
+        [req.user.userId, order.id, finalPrice]
       );
 
       return res.json({
@@ -216,7 +274,7 @@ router.post('/subscribe', authenticateToken, async (req, res) => {
       customerId,
       cardToken,
       billingAddress,
-      planAmount: 2990,
+      planAmount: finalPrice,
       paymentMethod: 'credit_card',
     });
 

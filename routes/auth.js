@@ -56,6 +56,9 @@ router.post('/register', async (req, res) => {
       { expiresIn: '30d' }
     );
 
+    const adminEmails = (process.env.ADMIN_EMAILS || '').split(',').map(e => e.trim().toLowerCase()).filter(Boolean);
+    const isAdmin = adminEmails.includes(user.email.toLowerCase());
+
     res.status(201).json({
       message: 'Usuário criado com sucesso',
       token,
@@ -64,7 +67,8 @@ router.post('/register', async (req, res) => {
         email: user.email,
         name: user.name,
         plan_status: 'free',
-        plan_expires_at: null
+        plan_expires_at: null,
+        is_admin: isAdmin,
       }
     });
   } catch (error) {
@@ -148,6 +152,9 @@ router.post('/login', async (req, res) => {
       { expiresIn: '30d' }
     );
 
+    const adminEmails = (process.env.ADMIN_EMAILS || '').split(',').map(e => e.trim().toLowerCase()).filter(Boolean);
+    const isAdmin = adminEmails.includes(user.email.toLowerCase());
+
     res.json({
       message: 'Login realizado com sucesso',
       token,
@@ -156,7 +163,8 @@ router.post('/login', async (req, res) => {
         email: user.email,
         name: user.name,
         plan_status: user.plan_status || 'free',
-        plan_expires_at: user.plan_expires_at
+        plan_expires_at: user.plan_expires_at,
+        is_admin: isAdmin,
       }
     });
   } catch (error) {
@@ -401,6 +409,26 @@ export async function requirePremium(req, res, next) {
   }
 }
 
+// Verificar se o usuário é administrador (usar APÓS authenticateToken)
+export async function requireAdmin(req, res, next) {
+  try {
+    const adminEmails = (process.env.ADMIN_EMAILS || '').split(',').map(e => e.trim().toLowerCase()).filter(Boolean);
+    const userEmail = req.user.email?.toLowerCase();
+
+    if (!userEmail || !adminEmails.includes(userEmail)) {
+      return res.status(403).json({
+        error: 'Acesso restrito a administradores',
+        message: 'Você não tem permissão para acessar esta funcionalidade.',
+      });
+    }
+
+    next();
+  } catch (error) {
+    console.error('Erro ao verificar admin:', error);
+    res.status(500).json({ error: 'Erro ao verificar permissões de admin' });
+  }
+}
+
 // Rota para verificar token válido
 router.get('/verify', authenticateToken, async (req, res) => {
   try {
@@ -425,6 +453,9 @@ router.get('/verify', authenticateToken, async (req, res) => {
       user.plan_status = 'expired';
     }
 
+    const adminEmails = (process.env.ADMIN_EMAILS || '').split(',').map(e => e.trim().toLowerCase()).filter(Boolean);
+    const isAdmin = adminEmails.includes(user.email.toLowerCase());
+
     res.json({
       user: {
         id: user.id,
@@ -432,6 +463,7 @@ router.get('/verify', authenticateToken, async (req, res) => {
         name: user.name,
         plan_status: user.plan_status || 'free',
         plan_expires_at: user.plan_expires_at,
+        is_admin: isAdmin,
       }
     });
   } catch (error) {

@@ -468,6 +468,50 @@ export async function initDatabase() {
       )
     `);
 
+    // Tabela de planos de assinatura
+    await dbPool.query(`
+      CREATE TABLE IF NOT EXISTS plans (
+        id SERIAL PRIMARY KEY,
+        name VARCHAR(255) NOT NULL,
+        description TEXT,
+        billing_type VARCHAR(20) NOT NULL CHECK (billing_type IN ('monthly', 'yearly')),
+        status VARCHAR(20) DEFAULT 'active' CHECK (status IN ('active', 'inactive')),
+        price_card INTEGER NOT NULL DEFAULT 0,
+        price_pix INTEGER NOT NULL DEFAULT 0,
+        promo_price_card INTEGER,
+        promo_price_pix INTEGER,
+        created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+        updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+      )
+    `);
+
+    // Tabela de cupons de desconto
+    await dbPool.query(`
+      CREATE TABLE IF NOT EXISTS coupons (
+        id SERIAL PRIMARY KEY,
+        code VARCHAR(50) UNIQUE NOT NULL,
+        discount_type VARCHAR(20) NOT NULL CHECK (discount_type IN ('percentage', 'fixed')),
+        discount_value INTEGER NOT NULL,
+        applies_to VARCHAR(20) DEFAULT 'both' CHECK (applies_to IN ('monthly', 'yearly', 'both')),
+        status VARCHAR(20) DEFAULT 'active' CHECK (status IN ('active', 'inactive')),
+        valid_until TIMESTAMP,
+        created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+        updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+      )
+    `);
+
+    // Inserir plano mensal padrão se não existir nenhum
+    const existingPlans = await dbPool.query('SELECT id FROM plans LIMIT 1');
+    if (existingPlans.rows.length === 0) {
+      await dbPool.query(`
+        INSERT INTO plans (name, description, billing_type, status, price_card, price_pix)
+        VALUES 
+          ('Mensal', 'Acesso completo a todas as funcionalidades', 'monthly', 'active', 2990, 2990),
+          ('Anual', 'Acesso completo com desconto anual', 'yearly', 'active', 29900, 29900)
+      `);
+      console.log('✅ Planos padrão criados');
+    }
+
     console.log('✅ Tabelas criadas/verificadas com sucesso');
   } catch (error) {
     console.error('❌ Erro ao criar tabelas:', error);
