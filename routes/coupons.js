@@ -19,7 +19,7 @@ router.get('/', authenticateToken, requireAdmin, async (req, res) => {
 // ====== POST /api/coupons — Criar cupom (admin) ======
 router.post('/', authenticateToken, requireAdmin, async (req, res) => {
   try {
-    const { code, discount_type, discount_value, applies_to, status, valid_until } = req.body;
+    const { code, discount_type, discount_value, applies_to, status, valid_until, duration_months } = req.body;
 
     if (!code || !discount_type || discount_value === undefined) {
       return res.status(400).json({ error: 'Código, tipo e valor do desconto são obrigatórios' });
@@ -42,8 +42,8 @@ router.post('/', authenticateToken, requireAdmin, async (req, res) => {
     }
 
     const result = await pool.query(
-      `INSERT INTO coupons (code, discount_type, discount_value, applies_to, status, valid_until)
-       VALUES (UPPER($1), $2, $3, $4, $5, $6)
+      `INSERT INTO coupons (code, discount_type, discount_value, applies_to, status, valid_until, duration_months)
+       VALUES (UPPER($1), $2, $3, $4, $5, $6, $7)
        RETURNING *`,
       [
         code,
@@ -52,6 +52,7 @@ router.post('/', authenticateToken, requireAdmin, async (req, res) => {
         applies_to || 'both',
         status || 'active',
         valid_until || null,
+        duration_months || null,
       ]
     );
 
@@ -65,7 +66,7 @@ router.post('/', authenticateToken, requireAdmin, async (req, res) => {
 // ====== PUT /api/coupons/:id — Editar cupom (admin) ======
 router.put('/:id', authenticateToken, requireAdmin, async (req, res) => {
   try {
-    const { code, discount_type, discount_value, applies_to, status, valid_until } = req.body;
+    const { code, discount_type, discount_value, applies_to, status, valid_until, duration_months } = req.body;
 
     const pool = getPool();
 
@@ -93,8 +94,9 @@ router.put('/:id', authenticateToken, requireAdmin, async (req, res) => {
         applies_to = COALESCE($4, applies_to),
         status = COALESCE($5, status),
         valid_until = $6,
+        duration_months = $7,
         updated_at = NOW()
-       WHERE id = $7
+       WHERE id = $8
        RETURNING *`,
       [
         code || null,
@@ -103,6 +105,7 @@ router.put('/:id', authenticateToken, requireAdmin, async (req, res) => {
         applies_to || null,
         status || null,
         valid_until !== undefined ? valid_until : null,
+        duration_months !== undefined ? (duration_months || null) : null,
         req.params.id,
       ]
     );
@@ -174,6 +177,7 @@ router.post('/validate', authenticateToken, async (req, res) => {
         discount_type: coupon.discount_type,
         discount_value: coupon.discount_value,
         applies_to: coupon.applies_to,
+        duration_months: coupon.duration_months || null,
       },
     });
   } catch (error) {

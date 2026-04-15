@@ -1,8 +1,14 @@
 import express from 'express';
+import crypto from 'crypto';
 import { authenticateToken, requireAdmin } from './auth.js';
 import getPool from '../db.js';
 
 const router = express.Router();
+
+// Helper: gerar código de acesso
+function generateAccessCode() {
+  return crypto.randomBytes(5).toString('hex').toUpperCase().substring(0, 8);
+}
 
 // ====== GET /api/plans — Listar planos (público: só ativos, admin: todos) ======
 router.get('/', async (req, res) => {
@@ -31,6 +37,97 @@ router.get('/', async (req, res) => {
   } catch (error) {
     console.error('Erro ao listar planos:', error);
     res.status(500).json({ error: 'Erro ao listar planos' });
+  }
+});
+
+// ====== CÓDIGOS DE ACESSO (Admin) — rotas antes de /:id para evitar conflito ======
+
+// GET /api/plans/access-codes — Listar todos os códigos de acesso
+router.get('/access-codes', authenticateToken, requireAdmin, async (req, res) => {
+  try {
+    const pool = getPool();
+    const result = await pool.query(`
+      SELECT 
+        ac.*,
+        u_purchaser.email as purchaser_email,
+        u_purchaser.name as purchaser_name,
+        u_redeemed.email as redeemed_by_email,
+        u_redeemed.name as redeemed_by_name
+      FROM access_codes ac
+      LEFT JOIN users u_purchaser ON ac.purchaser_user_id = u_purchaser.id
+      LEFT JOIN users u_redeemed ON ac.redeemed_by_user_id = u_redeemed.id
+      ORDER BY ac.created_at DESC
+    `);
+    res.json(result.rows);
+  } catch (error) {
+    console.error('Erro ao listar códigos:', error);
+    res.status(500).json({ error: 'Erro ao listar códigos de acesso' });
+  }
+});
+
+// POST /api/plans/access-codes — Gerar códigos de acesso (admin, sem pagamento)
+router.post('/access-codes', authenticateToken, requireAdmin, async (req, res) => {
+  try {
+    const { quantity, duration_days } = req.body;
+
+    const qty = parseInt(quantity) || 1;
+    if (qty < 1 || qty > 100) {
+      return res.status(400).json({ error: 'Quantidade deve ser entre 1 e 100' });
+    }
+
+    const days = parseInt(duration_days) || 30;
+    if (days < 1 || days > 3650) {
+      return res.status(400).json({ error: 'Duração deve ser entre 1 e 3650 dias' });
+    }
+
+    const pool = getPool();
+    const codes = [];
+
+    for (let i = 0; i < qty; i++) {
+      let code;
+      let unique = false;
+      while (!unique) {
+        code = generateAccessCode();
+        const exists = await pool.query('SELECT id FROM access_codes WHERE code = $1', [code]);
+        if (exists.rows.length === 0) unique = true;
+      }
+
+      await pool.query(
+        `INSERT INTO access_codes (code, purchaser_user_id, order_id, status, duration_days)
+         VALUES ($1, NULL, 'ADMIN_GENERATED', 'active', $2)`,
+        [code, days]
+      );
+      codes.push(code);
+    }
+
+    res.status(201).json({
+      message: `${qty} código(s) de acesso gerado(s) com sucesso!`,
+      codes,
+      duration_days: days,
+    });
+  } catch (error) {
+    console.error('Erro ao gerar códigos:', error);
+    res.status(500).json({ error: 'Erro ao gerar códigos de acesso' });
+  }
+});
+
+// DELETE /api/plans/access-codes/:id — Deletar código de acesso (admin)
+router.delete('/access-codes/:id', authenticateToken, requireAdmin, async (req, res) => {
+  try {
+    const pool = getPool();
+    const result = await pool.query(
+      'DELETE FROM access_codes WHERE id = $1 RETURNING id, code',
+      [req.params.id]
+    );
+
+    if (result.rows.length === 0) {
+      return res.status(404).json({ error: 'Código não encontrado' });
+    }
+
+    res.json({ message: `Código "${result.rows[0].code}" excluído` });
+  } catch (error) {
+    console.error('Erro ao deletar código:', error);
+    res.status(500).json({ error: 'Erro ao deletar código' });
   }
 });
 

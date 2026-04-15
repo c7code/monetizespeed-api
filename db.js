@@ -447,7 +447,7 @@ export async function initDatabase() {
       CREATE TABLE IF NOT EXISTS access_codes (
         id SERIAL PRIMARY KEY,
         code VARCHAR(20) UNIQUE NOT NULL,
-        purchaser_user_id INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+        purchaser_user_id INTEGER REFERENCES users(id) ON DELETE CASCADE,
         order_id VARCHAR(255),
         status VARCHAR(20) DEFAULT 'active' CHECK (status IN ('active', 'redeemed')),
         redeemed_by_user_id INTEGER REFERENCES users(id) ON DELETE SET NULL,
@@ -456,6 +456,11 @@ export async function initDatabase() {
         redeemed_at TIMESTAMP
       )
     `);
+
+    // Migração: tornar purchaser_user_id nullable (para códigos gerados pelo admin)
+    await dbPool.query(`
+      ALTER TABLE access_codes ALTER COLUMN purchaser_user_id DROP NOT NULL
+    `).catch(() => { /* já é nullable */ });
 
     await dbPool.query(`
       CREATE TABLE IF NOT EXISTS categories (
@@ -495,9 +500,23 @@ export async function initDatabase() {
         applies_to VARCHAR(20) DEFAULT 'both' CHECK (applies_to IN ('monthly', 'yearly', 'both')),
         status VARCHAR(20) DEFAULT 'active' CHECK (status IN ('active', 'inactive')),
         valid_until TIMESTAMP,
+        duration_months INTEGER,
         created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
         updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
       )
+    `);
+
+    // Migração: adicionar duration_months se não existir
+    await dbPool.query(`
+      DO $$ 
+      BEGIN
+        IF NOT EXISTS (
+          SELECT 1 FROM information_schema.columns 
+          WHERE table_name='coupons' AND column_name='duration_months'
+        ) THEN
+          ALTER TABLE coupons ADD COLUMN duration_months INTEGER;
+        END IF;
+      END $$;
     `);
 
     // Inserir plano mensal padrão se não existir nenhum
